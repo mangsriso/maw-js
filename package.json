@@ -5,5 +5,8 @@
   "bin": {
     "maw": "./src/cli.ts"
   },
-  "description": "maw.js — Multi-Agent Workflow in Bun/TS. Remote tmux orchestra control. CLI + Web UI."
+  "description": "maw.js — Multi-Agent Workflow in Bun/TS. Remote tmux orchestra control. CLI + Web UI.",
+  "dependencies": {
+    "hono": "^4.12.5"
+  }
 }

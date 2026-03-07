@@ -1,54 +1,42 @@
+import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { listSessions, capture, sendKeys } from "./ssh";
 
-export function startServer(port = 3456) {
-  const html = Bun.file(import.meta.dir + "/ui.html");
+const app = new Hono();
+app.use("/api/*", cors());
 
-  const server = Bun.serve({
-    port,
-    async fetch(req) {
-      const url = new URL(req.url);
-      const cors = { "Access-Control-Allow-Origin": "*" };
+// API routes
+app.get("/api/sessions", async (c) => {
+  return c.json(await listSessions());
+});
 
-      if (req.method === "OPTIONS") {
-        return new Response(null, {
-          headers: { ...cors, "Access-Control-Allow-Methods": "GET, POST", "Access-Control-Allow-Headers": "Content-Type" },
-        });
-      }
+app.get("/api/capture", async (c) => {
+  const target = c.req.query("target");
+  if (!target) return c.json({ error: "target required" }, 400);
+  return c.json({ content: await capture(target) });
+});
 
-      try {
-        if (url.pathname === "/api/sessions") {
-          return Response.json(await listSessions(), { headers: cors });
-        }
+app.post("/api/send", async (c) => {
+  const { target, text } = await c.req.json();
+  if (!target || !text) return c.json({ error: "target and text required" }, 400);
+  await sendKeys(target, text);
+  return c.json({ ok: true, target, text });
+});
 
-        if (url.pathname === "/api/capture") {
-          const target = url.searchParams.get("target");
-          if (!target) return Response.json({ error: "target required" }, { status: 400, headers: cors });
-          return Response.json({ content: await capture(target) }, { headers: cors });
-        }
+// Serve UI
+const html = Bun.file(import.meta.dir + "/ui.html");
+app.get("/", (c) => c.body(html.stream(), { headers: { "Content-Type": "text/html" } }));
 
-        if (url.pathname === "/api/send" && req.method === "POST") {
-          const { target, text } = await req.json();
-          if (!target || !text) return Response.json({ error: "target and text required" }, { status: 400, headers: cors });
-          await sendKeys(target, text);
-          return Response.json({ ok: true, target, text }, { headers: cors });
-        }
+// Error handler
+app.onError((err, c) => {
+  return c.json({ error: err.message }, 500);
+});
 
-        if (url.pathname === "/" || url.pathname === "/index.html") {
-          return new Response(html, { headers: { "Content-Type": "text/html", ...cors } });
-        }
-      } catch (e: any) {
-        return Response.json({ error: e.message }, { status: 500, headers: cors });
-      }
-
-      return new Response("Not found", { status: 404, headers: cors });
-    },
-  });
-
-  console.log(`maw serve → http://localhost:${server.port}`);
-  return server;
-}
+export { app };
 
 // Auto-start when run directly
 if (import.meta.main) {
-  startServer(+(process.env.MAW_PORT || 3456));
+  const port = +(process.env.MAW_PORT || 3456);
+  Bun.serve({ port, fetch: app.fetch });
+  console.log(`maw serve → http://localhost:${port}`);
 }
