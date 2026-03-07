@@ -212,7 +212,10 @@ function selectWindow(target, name) {
   el('targetName').textContent = name;
   el('output').innerHTML = '<div class="placeholder">connecting...</div>';
   document.querySelectorAll('.window').forEach(e => e.classList.toggle('selected', e.dataset.target === target));
-  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'subscribe', target }));
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({ type: 'subscribe', target }));
+    ws.send(JSON.stringify({ type: 'select', target }));
+  }
   el('term').focus();
   // Persist selection in URL hash
   location.hash = encodeURIComponent(target);
@@ -256,6 +259,20 @@ function clearInput() {
 }
 
 el('term').addEventListener('keydown', (e) => {
+  // Alt+Arrow to navigate between windows in same session
+  if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+    e.preventDefault();
+    if (!selectedTarget) return;
+    const wins = [...document.querySelectorAll('.window')].map(el => ({ target: el.dataset.target, name: el.dataset.name }));
+    const idx = wins.findIndex(w => w.target === selectedTarget);
+    if (idx < 0) return;
+    const dir = e.key === 'ArrowLeft' ? -1 : 1;
+    const next = wins[(idx + dir + wins.length) % wins.length];
+    selectWindow(next.target, next.name);
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'select', target: next.target }));
+    return;
+  }
+
   if (!selectedTarget || !ws || ws.readyState !== 1) return;
 
   if (e.key === 'Enter') {

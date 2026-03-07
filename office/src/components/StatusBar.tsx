@@ -8,27 +8,24 @@ interface StatusBarProps {
 
 export const StatusBar = memo(function StatusBar({ connected, agentCount, sessionCount }: StatusBarProps) {
   return (
-    <div style={{
-      display: "flex", alignItems: "center", justifyContent: "space-between",
-      padding: "8px 20px", borderBottom: "1px solid #2a2a2e",
-      fontFamily: "'Courier New', monospace", background: "#111",
-    }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <span style={{
-          display: "inline-block", width: 8, height: 8, borderRadius: "50%",
-          background: connected ? "#4caf50" : "#ef5350",
-          boxShadow: connected ? "0 0 8px rgba(76,175,80,0.6)" : "none",
-        }} />
-        <span style={{ fontSize: 11, color: connected ? "#4caf50" : "#ef5350", letterSpacing: 1 }}>
+    <header className="sticky top-0 z-20 flex items-center gap-4 mx-6 mt-4 px-6 py-3 rounded-2xl bg-black/50 backdrop-blur-xl border border-white/[0.06] shadow-[0_4px_30px_rgba(0,0,0,0.4)]">
+      <h1 className="text-lg font-bold tracking-[6px] text-cyan-400 uppercase">
+        Oracle Office
+      </h1>
+      <span className="text-[10px] text-white/25 tracking-[3px] hidden sm:inline">
+        multi-agent workflow orchestra
+      </span>
+
+      <div className="ml-auto flex items-center gap-4 text-[11px] text-white/50">
+        <span className="flex items-center gap-1.5">
+          <span className={`w-2 h-2 rounded-full ${connected ? "bg-emerald-400 shadow-[0_0_6px_#4caf50]" : "bg-red-400 animate-pulse"}`} />
           {connected ? "LIVE" : "RECONNECTING"}
         </span>
+        <span><strong className="text-cyan-400">{agentCount}</strong> agents</span>
+        <span><strong className="text-purple-400">{sessionCount}</strong> rooms</span>
+        <a href="/" className="text-white/25 hover:text-white/60 transition-colors">Terminal</a>
+        <a href="/dashboard" className="text-white/25 hover:text-white/60 transition-colors">Orbital</a>
       </div>
-      <div style={{ display: "flex", gap: 20, fontSize: 11, color: "#666" }}>
-        <span><strong style={{ color: "#26c6da" }}>{agentCount}</strong> agents</span>
-        <span><strong style={{ color: "#7e57c2" }}>{sessionCount}</strong> rooms</span>
-        <a href="/" style={{ color: "#444", textDecoration: "none" }}>terminal</a>
-        <a href="/dashboard" style={{ color: "#444", textDecoration: "none" }}>orbital</a>
-      </div>
-    </div>
+    </header>
   );
 });

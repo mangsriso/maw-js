@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo } from "react";
 import { agentColor } from "../lib/constants";
 import type { PaneStatus } from "../lib/types";
 
@@ -18,7 +18,6 @@ interface AgentAvatarProps {
 }
 
 export const AgentAvatar = memo(function AgentAvatar({ name, target, status, preview, accent, onClick }: AgentAvatarProps) {
-  const [hovered, setHovered] = useState(false);
   const color = agentColor(name);
   const fx = STATUS_FX[status];
   const filterId = `glow-${target.replace(/[^a-z0-9]/gi, "-")}`;
@@ -38,8 +37,6 @@ export const AgentAvatar = memo(function AgentAvatar({ name, target, status, pre
     <g
       style={{ cursor: "pointer" }}
       onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
     >
       <defs>
         <filter id={filterId} x="-50%" y="-50%" width="200%" height="200%">
@@ -56,9 +53,9 @@ export const AgentAvatar = memo(function AgentAvatar({ name, target, status, pre
       {fx.aura >= 2 && (
         <>
           <circle cx={0} cy={-6} r={42} fill="none" stroke={fx.color} strokeWidth={2}
-            opacity={0.2} style={{ animation: "saiyan-outer 1.2s ease-in-out infinite" }} />
+            opacity={0.2} style={{ animation: "saiyan-outer 2s ease-in-out infinite" }} />
           <circle cx={0} cy={-6} r={36} fill={`url(#${auraId})`}
-            style={{ animation: "saiyan-aura 0.8s ease-in-out infinite" }} />
+            style={{ animation: "saiyan-aura 2s ease-in-out infinite" }} />
           <rect x={-1.5} y={-65} width={3} height={30} rx={1} fill={fx.color} opacity={0.25}
             style={{ animation: "agent-pulse 0.6s ease-in-out infinite" }} />
           <ellipse cx={0} cy={24} rx={24} ry={6} fill="none" stroke={fx.color} strokeWidth={2}
@@ -216,19 +213,7 @@ export const AgentAvatar = memo(function AgentAvatar({ name, target, status, pre
       <circle cx={16} cy={-28} r={3.5} fill={fx.color} stroke="#1a1a1a" strokeWidth={1.5}
         style={fx.aura >= 2 ? { animation: "agent-pulse 0.6s ease-in-out infinite" } : {}} />
 
-      {/* Name label */}
-      <foreignObject x={-45} y={33} width={90} height={18} style={{ pointerEvents: "none" }}>
-        <div style={{ display: "flex", justifyContent: "center" }}>
-          <span style={{
-            fontSize: "9px", fontWeight: 700, color: "#e0e0e0",
-            fontFamily: "'Courier New', monospace",
-            backgroundColor: "rgba(0,0,0,0.75)", borderRadius: "3px",
-            padding: "1px 5px", whiteSpace: "nowrap",
-            border: `1px solid ${fx.color}44`,
-            textShadow: `0 0 6px ${fx.color}88`,
-          }}>{shortName}</span>
-        </div>
-      </foreignObject>
+      {/* Name label removed — rendered as HTML in AgentCard */}
 
       {/* Floating code (busy) */}
       {fx.typing && preview && (
@@ -243,26 +228,7 @@ export const AgentAvatar = memo(function AgentAvatar({ name, target, status, pre
         </foreignObject>
       )}
 
-      {/* Hover tooltip */}
-      {hovered && (
-        <g transform="translate(0, -50)">
-          <rect x={-85} y={-30} width={170} height={30} rx={6}
-            fill="rgba(8,8,16,0.95)" stroke={accent} strokeWidth={1}
-            style={{ filter: `drop-shadow(0 0 8px ${accent}55)` }} />
-          <polygon points="-4,2 4,2 0,8" fill="rgba(8,8,16,0.95)" />
-          <foreignObject x={-81} y={-28} width={162} height={26} style={{ pointerEvents: "none" }}>
-            <div style={{
-              fontSize: "8px", color: "#ccc", fontFamily: "'Courier New', monospace",
-              textAlign: "center", lineHeight: "12px",
-            }}>
-              <span style={{ color: accent, fontWeight: "bold" }}>{displayName}</span>
-              <span style={{ color: "#666" }}> · {status} · {target}</span>
-              {preview && <div style={{ color: "#999", marginTop: 1, overflow: "hidden",
-                textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{preview.slice(0, 55)}</div>}
-            </div>
-          </foreignObject>
-        </g>
-      )}
+      {/* Tooltip rendered as HTML in AgentCard */}
     </g>
   );
 });

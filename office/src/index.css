@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+body {
+  background: #020208;
+  color: #e0e0e0;
+  font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
+  overflow-x: hidden;
+}
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #020208; }
+::-webkit-scrollbar-thumb { background: #2a2a3e; border-radius: 3px; }
+
+/* Shared */
+@keyframes agent-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+@keyframes blink { 50% { opacity: 0; } }
+
+/* SVG chibi avatar animations */
+@keyframes saiyan-aura { 0% { r: 28; opacity: 0.4; } 50% { r: 38; opacity: 0.12; } 100% { r: 28; opacity: 0.4; } }
+@keyframes saiyan-outer { 0% { r: 38; opacity: 0.2; } 50% { r: 50; opacity: 0.04; } 100% { r: 38; opacity: 0.2; } }
+@keyframes typing-arm { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
+@keyframes float-code { 0% { opacity: 0; transform: translateY(0); } 20% { opacity: 0.7; } 80% { opacity: 0.7; } 100% { opacity: 0; transform: translateY(-30px); } }
+@keyframes sparkle { 0% { opacity: 0; transform: scale(0); } 50% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(0); } }
+@keyframes room-pulse { 0%, 100% { stroke-opacity: 0.2; } 50% { stroke-opacity: 0.5; } }
+
+/* Terminal modal slide up */
+@keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }

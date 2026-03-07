@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { serveStatic } from "hono/bun";
-import { listSessions, capture, sendKeys } from "./ssh";
+import { listSessions, capture, sendKeys, selectWindow } from "./ssh";
 import type { ServerWebSocket } from "bun";
 
 const app = new Hono();
@@ -21,6 +21,13 @@ app.post("/api/send", async (c) => {
   if (!target || !text) return c.json({ error: "target and text required" }, 400);
   await sendKeys(target, text);
   return c.json({ ok: true, target, text });
+});
+
+app.post("/api/select", async (c) => {
+  const { target } = await c.req.json();
+  if (!target) return c.json({ error: "target required" }, 400);
+  await selectWindow(target);
+  return c.json({ ok: true, target });
 });
 
 // Serve UI
@@ -120,6 +127,8 @@ export function startServer(port = +(process.env.MAW_PORT || 3456)) {
           if (data.type === "subscribe") {
             ws.data.target = data.target;
             pushCapture(ws); // immediate first push
+          } else if (data.type === "select") {
+            selectWindow(data.target).catch(() => {});
           } else if (data.type === "send") {
             sendKeys(data.target, data.text)
               .then(() => {

@@ -62,6 +62,10 @@ export async function capture(target: string, lines = 80, host?: string): Promis
   return ssh(`tmux capture-pane -t '${target}' -e -p 2>/dev/null | tail -${lines}`, host);
 }
 
+export async function selectWindow(target: string, host?: string): Promise<void> {
+  await ssh(`tmux select-window -t '${target}' 2>/dev/null`, host);
+}
+
 export async function sendKeys(target: string, text: string, host?: string): Promise<void> {
   const escaped = text.replace(/'/g, "'\\''");
   await ssh(`tmux send-keys -t '${target}' -- '${escaped}' Enter`, host);

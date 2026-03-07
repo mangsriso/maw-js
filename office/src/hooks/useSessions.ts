@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import type { Session, AgentState, PaneStatus } from "../lib/types";
 import { stripAnsi } from "../lib/ansi";
+import { playSaiyanSound } from "../lib/sounds";
 
 // Simple string hash
 function hash(s: string): number {
@@ -18,6 +19,7 @@ export function useSessions() {
 
   // Track content hashes for change detection
   const hashHistory = useRef<Record<string, { prev: number; curr: number; unchangedCount: number }>>({});
+  const lastSoundTime = useRef(0);
 
   const handleMessage = useCallback((data: any) => {
     if (data.type === "sessions") {
@@ -68,21 +70,21 @@ export function useSessions() {
               const hasPrompt = bottom.includes("\u276f"); // ❯
               const hasBusySign = /[∴✢]/.test(bottom) || /● \w+\(/.test(bottom); // Thinking/tool calls
 
-              // Determine status
+              // Determine status (slower transitions to avoid flicker)
               let status: PaneStatus;
               if (hasBusySign) {
                 // Explicit busy indicator always wins
                 status = "busy";
-              } else if (hasPrompt && entry.unchangedCount >= 1) {
-                // Prompt visible + content stable → ready
+              } else if (hasPrompt && entry.unchangedCount >= 2) {
+                // Prompt visible + content stable for 2+ polls → ready
                 status = "ready";
               } else if (entry.prev === 0) {
                 // First poll
                 status = hasPrompt ? "ready" : "idle";
-              } else if (entry.unchangedCount <= 2) {
-                // Changed recently (within ~6s) → busy
+              } else if (entry.unchangedCount <= 3) {
+                // Changed recently (within ~15s) → busy
                 status = "busy";
-              } else if (entry.unchangedCount <= 5) {
+              } else if (entry.unchangedCount <= 8) {
                 // Cooling down → ready
                 status = "ready";
               } else {
@@ -95,13 +97,21 @@ export function useSessions() {
               setCaptureData((p) => {
                 const existing = p[target];
                 if (existing && existing.preview === preview && existing.status === status) return p;
+                // Play power-up sound on transition to busy (max once per 60s)
+                if (status === "busy" && existing?.status !== "busy") {
+                  const now = Date.now();
+                  if (now - lastSoundTime.current > 60000) {
+                    lastSoundTime.current = now;
+                    playSaiyanSound();
+                  }
+                }
                 return { ...p, [target]: { preview, status } };
               });
             } catch {}
           })
         );
       }
-      pollTimer.current = setTimeout(poll, 3000); // Poll faster for better change detection
+      pollTimer.current = setTimeout(poll, 5000);
     }
     poll();
     return () => clearTimeout(pollTimer.current);
