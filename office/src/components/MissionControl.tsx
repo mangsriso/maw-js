@@ -44,9 +44,9 @@ export const MissionControl = memo(function MissionControl({
       style: roomStyle(s.name),
     }));
 
-    // Calculate positions in a radial layout
-    const cx = 600, cy = 400;
-    const radius = Math.min(250, 120 + sessionList.length * 20);
+    // Calculate positions in a radial layout — fill the viewport
+    const cx = 600, cy = 450;
+    const radius = Math.min(340, 180 + sessionList.length * 25);
 
     return sessionList.map((s, i) => {
       const angle = (i / sessionList.length) * Math.PI * 2 - Math.PI / 2;
@@ -80,36 +80,36 @@ export const MissionControl = memo(function MissionControl({
         </defs>
 
         {/* Background glow */}
-        <circle cx={600} cy={400} r={500} fill="url(#mc-bg-glow)" />
+        <circle cx={600} cy={450} r={500} fill="url(#mc-bg-glow)" />
 
         {/* Grid lines */}
         {Array.from({ length: 13 }, (_, i) => (
-          <line key={`vl-${i}`} x1={i * 100} y1={0} x2={i * 100} y2={800}
+          <line key={`vl-${i}`} x1={i * 100} y1={0} x2={i * 100} y2={900}
             stroke="#ffffff" strokeWidth={0.3} opacity={0.03} />
         ))}
-        {Array.from({ length: 9 }, (_, i) => (
+        {Array.from({ length: 10 }, (_, i) => (
           <line key={`hl-${i}`} x1={0} y1={i * 100} x2={1200} y2={i * 100}
             stroke="#ffffff" strokeWidth={0.3} opacity={0.03} />
         ))}
 
         {/* Orbital rings */}
-        <circle cx={600} cy={400} r={120} fill="none" stroke="#26c6da" strokeWidth={0.5} opacity={0.08}
+        <circle cx={600} cy={450} r={150} fill="none" stroke="#26c6da" strokeWidth={0.5} opacity={0.08}
           strokeDasharray="4 8" />
-        <circle cx={600} cy={400} r={250} fill="none" stroke="#7e57c2" strokeWidth={0.5} opacity={0.06}
+        <circle cx={600} cy={450} r={300} fill="none" stroke="#7e57c2" strokeWidth={0.5} opacity={0.06}
           strokeDasharray="6 12" />
-        <circle cx={600} cy={400} r={380} fill="none" stroke="#ffa726" strokeWidth={0.5} opacity={0.04}
+        <circle cx={600} cy={450} r={450} fill="none" stroke="#ffa726" strokeWidth={0.5} opacity={0.04}
           strokeDasharray="8 16" />
 
         {/* Center hub */}
-        <circle cx={600} cy={400} r={40} fill="none" stroke="#26c6da" strokeWidth={1} opacity={0.15} />
-        <circle cx={600} cy={400} r={6} fill="#26c6da" opacity={0.4} />
-        <text x={600} y={370} textAnchor="middle" fill="#26c6da" fontSize={10} opacity={0.5}
-          fontFamily="'SF Mono', monospace" letterSpacing={4}>MISSION CONTROL</text>
+        <circle cx={600} cy={450} r={45} fill="none" stroke="#26c6da" strokeWidth={1} opacity={0.15} />
+        <circle cx={600} cy={450} r={7} fill="#26c6da" opacity={0.4} />
+        <text x={600} y={418} textAnchor="middle" fill="#26c6da" fontSize={12} opacity={0.5}
+          fontFamily="'SF Mono', monospace" letterSpacing={5}>MISSION CONTROL</text>
 
         {/* Connection lines from hub to sessions */}
         {layout.map((s) => (
           <line key={`line-${s.session.name}`}
-            x1={600} y1={400} x2={s.x} y2={s.y}
+            x1={600} y1={450} x2={s.x} y2={s.y}
             stroke={s.style.accent} strokeWidth={0.5} opacity={0.08}
             strokeDasharray="2 6"
           />
@@ -118,7 +118,7 @@ export const MissionControl = memo(function MissionControl({
         {/* Session clusters */}
         {layout.map((s) => {
           const agentCount = s.agents.length;
-          const clusterRadius = Math.max(50, 20 + agentCount * 12);
+          const clusterRadius = Math.max(70, 35 + agentCount * 18);
           const hasBusy = s.agents.some((a) => a.status === "busy");
 
           return (
@@ -134,24 +134,24 @@ export const MissionControl = memo(function MissionControl({
 
               {/* Session label */}
               <text
-                x={s.x} y={s.y - clusterRadius - 8}
+                x={s.x} y={s.y - clusterRadius - 12}
                 textAnchor="middle"
                 fill={s.style.accent}
-                fontSize={9}
+                fontSize={13}
                 fontWeight="bold"
                 fontFamily="'SF Mono', monospace"
-                letterSpacing={2}
-                opacity={0.7}
+                letterSpacing={3}
+                opacity={0.8}
               >
                 {s.style.label.toUpperCase()}
               </text>
 
               {/* Agent count badge */}
               <text
-                x={s.x} y={s.y + clusterRadius + 14}
+                x={s.x} y={s.y + clusterRadius + 18}
                 textAnchor="middle"
                 fill={s.style.accent}
-                fontSize={8}
+                fontSize={10}
                 fontFamily="'SF Mono', monospace"
                 opacity={0.6}
               >
@@ -161,11 +161,11 @@ export const MissionControl = memo(function MissionControl({
               {/* Agents within cluster */}
               {s.agents.map((agent, ai) => {
                 const agentAngle = (ai / Math.max(1, agentCount)) * Math.PI * 2 - Math.PI / 2;
-                const agentRadius = agentCount === 1 ? 0 : Math.min(clusterRadius - 30, 25 + agentCount * 4);
+                const agentRadius = agentCount === 1 ? 0 : Math.min(clusterRadius - 35, 35 + agentCount * 6);
                 const ax = s.x + Math.cos(agentAngle) * agentRadius;
                 const ay = s.y + Math.sin(agentAngle) * agentRadius;
                 const isHovered = hoveredAgent === agent.target;
-                const scale = isHovered ? 0.55 : 0.45;
+                const scale = isHovered ? 0.75 : 0.65;
 
                 return (
                   <g key={agent.target} transform={`translate(${ax}, ${ay})`}>
@@ -187,10 +187,10 @@ export const MissionControl = memo(function MissionControl({
                     </g>
                     {/* Agent name (below) */}
                     <text
-                      y={24}
+                      y={28}
                       textAnchor="middle"
                       fill={isHovered ? s.style.accent : "#ffffff"}
-                      fontSize={isHovered ? 8 : 7}
+                      fontSize={isHovered ? 11 : 9}
                       fontFamily="'SF Mono', monospace"
                       opacity={isHovered ? 1 : 0.7}
                       style={{ transition: "all 0.2s", cursor: "pointer" }}
