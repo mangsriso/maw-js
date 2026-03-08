@@ -153,7 +153,7 @@ export const MissionControl = memo(function MissionControl({
                 fill={s.style.accent}
                 fontSize={8}
                 fontFamily="'SF Mono', monospace"
-                opacity={0.35}
+                opacity={0.6}
               >
                 {agentCount} agent{agentCount !== 1 ? "s" : ""}
               </text>
@@ -192,7 +192,7 @@ export const MissionControl = memo(function MissionControl({
                       fill={isHovered ? s.style.accent : "#ffffff"}
                       fontSize={isHovered ? 8 : 7}
                       fontFamily="'SF Mono', monospace"
-                      opacity={isHovered ? 0.9 : 0.4}
+                      opacity={isHovered ? 1 : 0.7}
                       style={{ transition: "all 0.2s", cursor: "pointer" }}
                       onClick={() => onAgentClick(agent)}
                     >
@@ -227,11 +227,11 @@ export const MissionControl = memo(function MissionControl({
         <h1 className="text-lg font-bold tracking-[6px] text-cyan-400 uppercase">
           Mission Control
         </h1>
-        <span className="text-[10px] text-white/25 tracking-[3px] hidden sm:inline">
+        <span className="text-[10px] text-white/40 tracking-[3px] hidden sm:inline">
           oracle fleet overview
         </span>
 
-        <div className="ml-auto flex items-center gap-5 text-[11px] text-white/50">
+        <div className="ml-auto flex items-center gap-5 text-[11px] text-white/70">
           <span className="flex items-center gap-1.5">
             <span className={`w-2 h-2 rounded-full ${connected ? "bg-emerald-400 shadow-[0_0_6px_#4caf50]" : "bg-red-400 animate-pulse"}`} />
             {connected ? "LIVE" : "..."}
@@ -248,16 +248,16 @@ export const MissionControl = memo(function MissionControl({
             <span className="w-2 h-2 rounded-full bg-white/30" />
             <strong className="text-white/40">{idleCount}</strong> idle
           </span>
-          <a href="/office/" className="text-white/25 hover:text-white/60 transition-colors">Office</a>
-          <a href="/" className="text-white/25 hover:text-white/60 transition-colors">Terminal</a>
-          <a href="/dashboard" className="text-white/25 hover:text-white/60 transition-colors">Orbital</a>
+          <a href="/office/" className="text-white/50 hover:text-white/80 transition-colors">Office</a>
+          <a href="/" className="text-white/50 hover:text-white/80 transition-colors">Terminal</a>
+          <a href="/dashboard" className="text-white/50 hover:text-white/80 transition-colors">Orbital</a>
         </div>
       </div>
 
       {/* Bottom stats */}
       <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-6 px-6 py-2 rounded-xl bg-black/40 backdrop-blur border border-white/[0.04]">
-        <span className="text-[10px] text-white/25 tracking-widest uppercase">Fleet Power</span>
-        <div className="w-32 h-1.5 bg-white/5 rounded-full overflow-hidden">
+        <span className="text-[10px] text-white/50 tracking-widest uppercase">Fleet Power</span>
+        <div className="w-32 h-1.5 bg-white/10 rounded-full overflow-hidden">
           <div
             className="h-full rounded-full transition-all duration-700"
             style={{
@@ -266,10 +266,10 @@ export const MissionControl = memo(function MissionControl({
             }}
           />
         </div>
-        <span className="text-[10px] text-white/20 tabular-nums">
+        <span className="text-[10px] text-white/50 tabular-nums">
           {busyCount}/{agents.length} active
         </span>
-        <span className="text-[10px] text-white/15 tabular-nums">
+        <span className="text-[10px] text-white/40 tabular-nums">
           {sessions.length} rooms
         </span>
       </div>

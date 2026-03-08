@@ -26,9 +26,9 @@ function cleanName(name: string) {
 }
 
 const STATUS_DOT: Record<string, string> = {
-  busy: "#ffa726",
+  busy: "#fdd835",
   ready: "#4caf50",
-  idle: "#555",
+  idle: "#666",
 };
 
 export function TerminalModal({ agent, send, onClose, onNavigate, onSelectSibling, siblings }: TerminalModalProps) {

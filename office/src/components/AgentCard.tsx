@@ -48,11 +48,11 @@ export const AgentCard = memo(function AgentCard({ agent, accent, saiyan, onClic
           }}
         >
           <div className="text-sm font-bold" style={{ color: accent }}>{displayName}</div>
-          <div className="text-xs text-white/50 mt-0.5">
+          <div className="text-xs text-white/70 mt-0.5">
             {agent.status} · {agent.target}
           </div>
           {agent.preview && (
-            <div className="text-[10px] text-white/35 mt-1 max-w-[250px] truncate">
+            <div className="text-[10px] text-white/50 mt-1 max-w-[250px] truncate">
               {agent.preview.slice(0, 60)}
             </div>
           )}

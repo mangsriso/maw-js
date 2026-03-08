@@ -4,8 +4,8 @@ import type { PaneStatus } from "../lib/types";
 
 const STATUS_FX: Record<PaneStatus, { color: string; aura: number; sparkle: boolean; typing: boolean }> = {
   ready: { color: "#4caf50", aura: 1, sparkle: false, typing: false },
-  busy:  { color: "#ffa726", aura: 2, sparkle: true, typing: true },
-  idle:  { color: "#555",    aura: 0, sparkle: false, typing: false },
+  busy:  { color: "#fdd835", aura: 2, sparkle: true, typing: true },
+  idle:  { color: "#666",    aura: 0, sparkle: false, typing: false },
 };
 
 interface AgentAvatarProps {

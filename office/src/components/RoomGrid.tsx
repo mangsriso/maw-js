@@ -27,8 +27,8 @@ export const RoomGrid = memo(function RoomGrid({ sessions, agents, saiyanTargets
     <div className="max-w-[960px] mx-auto px-8 pt-8 pb-12">
       {/* Power bar */}
       <div className="flex items-center gap-3 mb-5 px-1">
-        <span className="text-[10px] text-white/40 tracking-widest uppercase">Power Level</span>
-        <div className="w-20 h-1.5 bg-white/5 rounded-full overflow-hidden">
+        <span className="text-[10px] text-white/50 tracking-widest uppercase">Power Level</span>
+        <div className="w-20 h-1.5 bg-white/10 rounded-full overflow-hidden">
           <div
             className="h-full rounded-full transition-all duration-500"
             style={{
@@ -37,7 +37,7 @@ export const RoomGrid = memo(function RoomGrid({ sessions, agents, saiyanTargets
             }}
           />
         </div>
-        <span className="text-[10px] text-white/30 tabular-nums">{busyCount}/{agents.length}</span>
+        <span className="text-[10px] text-white/50 tabular-nums">{busyCount}/{agents.length}</span>
       </div>
 
       {/* Room grid */}
@@ -93,7 +93,7 @@ export const RoomGrid = memo(function RoomGrid({ sessions, agents, saiyanTargets
                   />
                 ))}
                 {roomAgents.length === 0 && (
-                  <div className="col-span-full text-center text-[10px] text-white/15 py-4">
+                  <div className="col-span-full text-center text-[10px] text-white/30 py-4">
                     Empty room
                   </div>
                 )}
