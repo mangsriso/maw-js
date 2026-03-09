@@ -71,10 +71,10 @@ async fn main() {
             let mut out = OUTPUT.lock().unwrap();
             *out = match &hovered_agent {
                 Some(target) => match store.agents.get(target) {
-                    Some(a) => format!("1|{:.0}|{:.0}|{}|{}|{}|{}|{}",
+                    Some(a) => format!("1|{:.0}|{:.0}|{}|{}|{}|{}|{}|{}",
                         mouse.0, mouse.1 - 80.0,
                         a.name, a.session, a.status.as_str(),
-                        a.preview, agent_accent_hex(&a.name)),
+                        a.preview, agent_accent_hex(&a.name), a.target),
                     None => "0".to_string(),
                 },
                 None => "0".to_string(),

@@ -55,7 +55,13 @@ export function startDataLoop(exports) {
       }));
     }
 
-    if (agents.length > 0) pushAgents(exports, agents);
+    if (agents.length > 0) {
+      pushAgents(exports, agents);
+      // Share target map with popup for capture lookups
+      const targetMap = {};
+      agents.forEach(a => { targetMap[a.target] = { session: a.session, name: a.name }; });
+      if (window.__wasmPopupSetTargets) window.__wasmPopupSetTargets(targetMap);
+    }
     if (saiyanList.length > 0) pushSaiyan(exports, saiyanList);
 
     setTimeout(poll, 5000);
