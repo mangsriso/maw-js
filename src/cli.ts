@@ -110,31 +110,32 @@ async function cmdWake(oracle: string, opts: { task?: string; newWt?: string; pr
   let targetPath = repoPath;
   let windowName = oracle;
 
-  if (opts.newWt) {
-    // --new <name>: create worktree + branch
-    const existing = await findWorktrees(parentDir, repoName);
-    const nums = existing.map(w => parseInt(w.name) || 0);
-    const nextNum = nums.length > 0 ? Math.max(...nums) + 1 : 1;
-    const wtName = `${nextNum}-${opts.newWt}`;
-    const wtPath = `${parentDir}/${repoName}.wt-${wtName}`;
-    const branch = `agents/${wtName}`;
-
-    await ssh(`git -C '${repoPath}' worktree add '${wtPath}' -b '${branch}'`);
-    console.log(`\x1b[32m+\x1b[0m worktree: ${wtPath} (${branch})`);
-
-    targetPath = wtPath;
-    windowName = `${oracle}-${opts.newWt}`;
-  } else if (opts.task) {
-    // Wake existing worktree
+  if (opts.newWt || opts.task) {
+    const name = opts.newWt || opts.task!;
     const worktrees = await findWorktrees(parentDir, repoName);
-    const match = worktrees.find(w => w.name.includes(opts.task!));
-    if (!match) {
-      console.error(`worktree not found: '${opts.task}'. Available:`);
-      for (const w of worktrees) console.error(`  ${w.name} → ${w.path}`);
-      process.exit(1);
+
+    // Try to find existing worktree matching this name
+    const match = worktrees.find(w => w.name.endsWith(`-${name}`) || w.name === name);
+
+    if (match) {
+      // Reuse existing worktree
+      console.log(`\x1b[33m⚡\x1b[0m reusing worktree: ${match.path}`);
+      targetPath = match.path;
+      windowName = `${oracle}-${name}`;
+    } else {
+      // Create new worktree
+      const nums = worktrees.map(w => parseInt(w.name) || 0);
+      const nextNum = nums.length > 0 ? Math.max(...nums) + 1 : 1;
+      const wtName = `${nextNum}-${name}`;
+      const wtPath = `${parentDir}/${repoName}.wt-${wtName}`;
+      const branch = `agents/${wtName}`;
+
+      await ssh(`git -C '${repoPath}' worktree add '${wtPath}' -b '${branch}'`);
+      console.log(`\x1b[32m+\x1b[0m worktree: ${wtPath} (${branch})`);
+
+      targetPath = wtPath;
+      windowName = `${oracle}-${name}`;
     }
-    targetPath = match.path;
-    windowName = `${oracle}-${match.name}`;
   }
 
   // Check if window already exists
