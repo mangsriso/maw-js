@@ -6,6 +6,7 @@ import { cmdOverview } from "./overview";
 import { cmdWake } from "./wake";
 import { cmdPulseAdd, cmdPulseLs } from "./pulse";
 import { cmdSpawn } from "./spawn";
+import { cmdOracleList } from "./oracle";
 
 const args = process.argv.slice(2);
 const cmd = args[0]?.toLowerCase();
@@ -64,6 +65,7 @@ function usage() {
   maw hey <agent> <msg...>    Send message to agent (alias: tell)
   maw wake <oracle> [task]    Wake oracle in tmux window + claude
   maw spawn <oracle> [opts]   Create tmux session from worktrees
+  maw oracle ls               Fleet status (awake/sleeping/worktrees)
   maw overview              War-room: all oracles in split panes
   maw overview neo hermes   Only specific oracles
   maw overview --kill       Tear down overview
@@ -140,6 +142,14 @@ if (!cmd || cmd === "--help" || cmd === "-h") {
   }
 } else if (cmd === "overview" || cmd === "warroom" || cmd === "ov") {
   await cmdOverview(args.slice(1));
+} else if (cmd === "oracle" || cmd === "oracles" || cmd === "fleet") {
+  const subcmd = args[1]?.toLowerCase();
+  if (!subcmd || subcmd === "ls" || subcmd === "list") {
+    await cmdOracleList();
+  } else {
+    console.error("usage: maw oracle ls");
+    process.exit(1);
+  }
 } else if (cmd === "spawn") {
   if (!args[1]) { console.error("usage: maw spawn <oracle> [--name <session>] [-c|--continue]"); process.exit(1); }
   const spawnOpts: { name?: string; continue?: boolean } = {};
