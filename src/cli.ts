@@ -59,7 +59,7 @@ function usage() {
 \x1b[33mUsage:\x1b[0m
   maw ls                      List sessions + windows
   maw peek [agent]            Peek agent screen (or all)
-  maw hey <agent> <msg...>    Send message to agent
+  maw hey <agent> <msg...>    Send message to agent (alias: tell)
   maw <agent> <msg...>        Shorthand for hey
   maw <agent>                 Shorthand for peek
   maw serve [port]            Start web UI (default: 3456)
@@ -85,7 +85,7 @@ if (!cmd || cmd === "--help" || cmd === "-h") {
   await cmdList();
 } else if (cmd === "peek" || cmd === "see") {
   await cmdPeek(args[1]);
-} else if (cmd === "hey" || cmd === "send") {
+} else if (cmd === "hey" || cmd === "send" || cmd === "tell") {
   if (!args[1] || !args[2]) { console.error("usage: maw hey <agent> <message>"); process.exit(1); }
   await cmdSend(args[1], args.slice(2).join(" "));
 } else if (cmd === "serve") {
