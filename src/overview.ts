@@ -49,7 +49,7 @@ export function paneTitle(t: OverviewTarget): string {
 
 export function mirrorCmd(t: OverviewTarget): string {
   const target = `${t.session}:${t.window}`;
-  return `watch --color -t -n0.5 "tmux capture-pane -t '${target}' -e -p 2>/dev/null | sed 's/\\x1b\\[[0-9;]*m//g' | sed '/^[[:space:]]*$/d' | tail -\\$(tput lines)"`;
+  return `watch --color -t -n0.5 "tmux capture-pane -t '${target}' -e -p 2>/dev/null | sed -E 's/[─━]{6,}/────────────────────────────────────────────────────────────/g' | grep -v '^$' | tail -\\$(tput lines)"`;
 }
 
 export function pickLayout(count: number): string {
