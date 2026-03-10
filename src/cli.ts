@@ -242,10 +242,9 @@ async function ensurePeriodComments(repo: string, threadNum: number): Promise<Re
     } else {
       // Create period comment
       const body = `${p.label}\n\n_(no tasks yet)_`;
-      const jsonBody = JSON.stringify({ body });
-      const escapedBody = jsonBody.replace(/'/g, "'\\''");
+      const escaped = body.replace(/'/g, "'\\''");
       const created = (await ssh(
-        `echo '${escapedBody}' | gh api repos/${repo}/issues/${threadNum}/comments --input - --jq '.id'`
+        `gh api repos/${repo}/issues/${threadNum}/comments -f body='${escaped}' --jq '.id'`
       )).trim();
       result[p.key] = { id: created, body };
     }
@@ -271,10 +270,9 @@ async function addTaskToPeriodComment(repo: string, threadNum: number, period: s
     newBody = comment.body + "\n" + taskLine;
   }
 
-  // Use --input to pass body via stdin (handles newlines correctly)
-  const jsonBody = JSON.stringify({ body: newBody });
-  const escaped = jsonBody.replace(/'/g, "'\\''");
-  await ssh(`echo '${escaped}' | gh api repos/${repo}/issues/comments/${comment.id} -X PATCH --input -`);
+  // Use -f body= for update
+  const escaped = newBody.replace(/'/g, "'\\''");
+  await ssh(`gh api repos/${repo}/issues/comments/${comment.id} -X PATCH -f body='${escaped}'`);
 }
 
 async function cmdPulseAdd(title: string, opts: { oracle?: string; priority?: string; wt?: string }) {
