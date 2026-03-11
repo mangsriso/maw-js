@@ -5,7 +5,7 @@ import { AgentRow } from "./AgentRow";
 import { roomStyle, PREVIEW_CARD } from "../lib/constants";
 import { BottomStats } from "./BottomStats";
 import { useFps } from "./FpsCounter";
-import { useFleetStore, RECENT_TTL_MS } from "../lib/store";
+import { useFleetStore, RECENT_TTL_MS, type RecentEntry } from "../lib/store";
 import type { AgentState, Session, AgentEvent } from "../lib/types";
 
 interface FleetGridProps {
@@ -88,8 +88,8 @@ export const FleetGrid = memo(function FleetGrid({
 
   // Sync busy agents to store
   useEffect(() => {
-    const busyTargets = agents.filter(a => a.status === "busy").map(a => a.target);
-    if (busyTargets.length > 0) markBusy(busyTargets);
+    const busyAgentsData = agents.filter(a => a.status === "busy").map(a => ({ target: a.target, name: a.name, session: a.session }));
+    if (busyAgentsData.length > 0) markBusy(busyAgentsData);
     pruneRecent();
   }, [agents, markBusy, pruneRecent]);
 
@@ -182,13 +182,19 @@ export const FleetGrid = memo(function FleetGrid({
   const readyCount = agents.filter(a => a.status === "ready").length;
   const idleCount = agents.length - busyCount - readyCount;
 
-  // Recently active from zustand store
-  const recentlyActive = useMemo(() => {
+  // Recently active from zustand store — works before WebSocket connects
+  const recentlyActive = useMemo((): (AgentState | RecentEntry)[] => {
     const busyTargets = new Set(busyAgents.map(a => a.target));
-    const now = Date.now();
-    return agents
-      .filter(a => !busyTargets.has(a.target) && recentMap[a.target] && (now - recentMap[a.target]) < RECENT_TTL_MS)
-      .sort((a, b) => (recentMap[b.target] || 0) - (recentMap[a.target] || 0));
+    const agentMap = new Map(agents.map(a => [a.target, a]));
+
+    // Get all recent entries, exclude currently busy
+    const entries = Object.values(recentMap)
+      .filter(e => !busyTargets.has(e.target))
+      .sort((a, b) => b.lastBusy - a.lastBusy)
+      .slice(0, 10);
+
+    // Merge with live agent data when available
+    return entries.map(e => agentMap.get(e.target) || e);
   }, [agents, busyAgents, recentMap]);
 
   return (
@@ -244,37 +250,43 @@ export const FleetGrid = memo(function FleetGrid({
 
       {/* Rooms */}
       <div className="max-w-5xl mx-auto flex flex-col px-6 lg:px-8 py-6 gap-4">
-        {/* Recently Active group */}
-        {recentlyActive.length > 0 && (
-          <section className="rounded-2xl overflow-hidden" style={{ background: "#12121c", border: "1px solid rgba(251,191,36,0.15)", boxShadow: "0 2px 8px rgba(0,0,0,0.3)" }}>
-            <div className="flex items-center gap-5 px-6 py-4 cursor-pointer select-none" style={{ background: "rgba(251,191,36,0.03)" }}
-              onClick={() => toggleCollapsed("_recent")} role="button" tabIndex={0}
-              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleCollapsed("_recent"); } }}>
-              <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: "#fbbf24", boxShadow: "0 0 6px #fbbf24" }} />
-              <h3 className="text-base font-bold tracking-[4px] uppercase" style={{ color: "#fbbf24" }}>Recently Active</h3>
-              <span className="text-xs font-mono font-bold px-2.5 py-1 rounded-md" style={{ background: "rgba(251,191,36,0.15)", color: "#fbbf24" }}>{recentlyActive.length}</span>
-              <svg width={16} height={16} viewBox="0 0 16 16" fill="none" className="ml-auto flex-shrink-0 transition-transform duration-200"
-                style={{ transform: isCollapsed("_recent") ? "rotate(-90deg)" : "rotate(0deg)" }}>
-                <path d="M4 6l4 4 4-4" stroke="#fbbf24" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" opacity={0.5} />
-              </svg>
+        {/* Recently Active group — always visible */}
+        <section className="rounded-2xl overflow-hidden" style={{ background: "#12121c", border: "1px solid rgba(251,191,36,0.15)", boxShadow: "0 2px 8px rgba(0,0,0,0.3)" }}>
+          <div className="flex items-center gap-5 px-6 py-4 cursor-pointer select-none" style={{ background: "rgba(251,191,36,0.03)" }}
+            onClick={() => toggleCollapsed("_recent")} role="button" tabIndex={0}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleCollapsed("_recent"); } }}>
+            <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: "#fbbf24", boxShadow: "0 0 6px #fbbf24" }} />
+            <h3 className="text-base font-bold tracking-[4px] uppercase" style={{ color: "#fbbf24" }}>Recently Active</h3>
+            <span className="text-xs font-mono font-bold px-2.5 py-1 rounded-md" style={{ background: "rgba(251,191,36,0.15)", color: "#fbbf24" }}>{recentlyActive.length}</span>
+            <svg width={16} height={16} viewBox="0 0 16 16" fill="none" className="ml-auto flex-shrink-0 transition-transform duration-200"
+              style={{ transform: isCollapsed("_recent") ? "rotate(-90deg)" : "rotate(0deg)" }}>
+              <path d="M4 6l4 4 4-4" stroke="#fbbf24" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" opacity={0.5} />
+            </svg>
+          </div>
+          {!isCollapsed("_recent") && <div className="h-[1px]" style={{ background: "rgba(251,191,36,0.12)" }} />}
+          {!isCollapsed("_recent") && (
+            <div className="flex flex-col">
+              {recentlyActive.length === 0 && (
+                <div className="px-6 py-4 text-[13px] font-mono text-white/20">No recent activity yet</div>
+              )}
+              {recentlyActive.map((entry, i) => {
+                const rs = roomStyle(entry.session);
+                const lastBusy = recentMap[entry.target]?.lastBusy || 0;
+                const ago = Math.round((Date.now() - lastBusy) / 1000);
+                // Build a full AgentState — use live data if available, otherwise fake from stored metadata
+                const agent: AgentState = "status" in entry
+                  ? entry as AgentState
+                  : { target: entry.target, name: entry.name, session: entry.session, windowIndex: 0, active: false, preview: "", status: "idle" };
+                return (
+                  <AgentRow key={`recent-${entry.target}`} agent={agent} accent={rs.accent} roomLabel={rs.label}
+                    saiyan={saiyanTargets.has(entry.target)} isLast={i === recentlyActive.length - 1}
+                    agoLabel={ago < 60 ? `${ago}s ago` : `${Math.floor(ago / 60)}m ago`}
+                    observe={observe} showPreview={showPreview} hidePreview={hidePreview} onAgentClick={onAgentClick} />
+                );
+              })}
             </div>
-            {!isCollapsed("_recent") && <div className="h-[1px]" style={{ background: "rgba(251,191,36,0.12)" }} />}
-            {!isCollapsed("_recent") && (
-              <div className="flex flex-col">
-                {recentlyActive.map((agent, i) => {
-                  const rs = roomStyle(agent.session);
-                  const ago = Math.round((Date.now() - (recentMap[agent.target] || 0)) / 1000);
-                  return (
-                    <AgentRow key={`recent-${agent.target}`} agent={agent} accent={rs.accent} roomLabel={rs.label}
-                      saiyan={saiyanTargets.has(agent.target)} isLast={i === recentlyActive.length - 1}
-                      agoLabel={ago < 60 ? `${ago}s ago` : `${Math.floor(ago / 60)}m ago`}
-                      observe={observe} showPreview={showPreview} hidePreview={hidePreview} onAgentClick={onAgentClick} />
-                  );
-                })}
-              </div>
-            )}
-          </section>
-        )}
+          )}
+        </section>
 
         {/* Room cards */}
         {visualRooms.map((vr) => {

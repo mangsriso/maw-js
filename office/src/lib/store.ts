@@ -1,10 +1,17 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
+export interface RecentEntry {
+  name: string;
+  session: string;
+  target: string;
+  lastBusy: number;
+}
+
 interface FleetStore {
-  // Recently active: target → last-busy timestamp
-  recentMap: Record<string, number>;
-  markBusy: (targets: string[]) => void;
+  // Recently active: target → agent metadata + timestamp
+  recentMap: Record<string, RecentEntry>;
+  markBusy: (agents: { target: string; name: string; session: string }[]) => void;
   pruneRecent: () => void;
 
   // UI preferences
@@ -22,21 +29,25 @@ export const useFleetStore = create<FleetStore>()(
   persist(
     (set, get) => ({
       recentMap: {},
-      markBusy: (targets) => set((s) => {
+      markBusy: (agents) => set((s) => {
         const now = Date.now();
         const next = { ...s.recentMap };
         let changed = false;
-        for (const t of targets) {
-          if (next[t] !== now) { next[t] = now; changed = true; }
+        for (const a of agents) {
+          const prev = next[a.target];
+          if (!prev || prev.lastBusy !== now || prev.name !== a.name || prev.session !== a.session) {
+            next[a.target] = { name: a.name, session: a.session, target: a.target, lastBusy: now };
+            changed = true;
+          }
         }
         return changed ? { recentMap: next } : s;
       }),
       pruneRecent: () => set((s) => {
         const now = Date.now();
-        const next: Record<string, number> = {};
+        const next: Record<string, RecentEntry> = {};
         let changed = false;
         for (const [k, v] of Object.entries(s.recentMap)) {
-          if (now - v < RECENT_TTL) next[k] = v;
+          if (now - v.lastBusy < RECENT_TTL) next[k] = v;
           else changed = true;
         }
         return changed ? { recentMap: next } : s;
