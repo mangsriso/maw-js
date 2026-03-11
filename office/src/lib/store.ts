@@ -66,12 +66,32 @@ export const useFleetStore = create<FleetStore>()(
     }),
     {
       name: "maw.fleet",
+      version: 1,
       partialize: (s) => ({
         recentMap: s.recentMap,
         sortMode: s.sortMode,
         grouped: s.grouped,
         collapsed: s.collapsed,
       }),
+      migrate: (persisted: unknown, version: number) => {
+        const state = persisted as Record<string, unknown>;
+        if (version === 0 && state.recentMap) {
+          // v0: recentMap was Record<string, number>, migrate to Record<string, RecentEntry>
+          const old = state.recentMap as Record<string, unknown>;
+          const next: Record<string, RecentEntry> = {};
+          for (const [k, v] of Object.entries(old)) {
+            if (typeof v === "number") {
+              // Old format — drop it (no metadata to reconstruct)
+              continue;
+            }
+            if (v && typeof v === "object" && "lastBusy" in v) {
+              next[k] = v as RecentEntry;
+            }
+          }
+          state.recentMap = next;
+        }
+        return state;
+      },
     }
   )
 );
