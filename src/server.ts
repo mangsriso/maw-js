@@ -18,8 +18,8 @@ app.get("/api/capture", async (c) => {
   if (!target) return c.json({ error: "target required" }, 400);
   try {
     return c.json({ content: await capture(target) });
-  } catch {
-    return c.json({ content: "" });
+  } catch (e: any) {
+    return c.json({ content: "", error: e.message });
   }
 });
 
