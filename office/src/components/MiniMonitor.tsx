@@ -125,8 +125,8 @@ export const MiniMonitor = memo(function MiniMonitor({
     <div
       className="flex-shrink-0 rounded-lg overflow-hidden cursor-pointer border transition-all duration-500 group relative"
       style={{
-        width: 80,
-        height: 56,
+        width: 140,
+        height: 90,
         background: "#08080c",
         borderColor,
         boxShadow: glowShadow,

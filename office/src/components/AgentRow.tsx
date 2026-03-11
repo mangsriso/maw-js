@@ -71,6 +71,12 @@ function AgentInfo({ agent, isBusy, displayName, accent, agoLabel, saiyan, saiya
           {agent.status}
         </span>
         {agoLabel && <span className="text-[10px] font-mono text-white/25 flex-shrink-0">{agoLabel}</span>}
+        {/* Last activity reason — shows what triggered busy status */}
+        {!isBusy && feedLog && feedLog.length > 0 && (
+          <span className="text-[10px] font-mono truncate max-w-[200px] flex-shrink" style={{ color: "#64748B" }}>
+            {feedLog[0].text}
+          </span>
+        )}
         {saiyan && <span className="text-[10px] font-mono px-2.5 py-1 rounded-md bg-amber-400/20 text-amber-400 flex-shrink-0">SAIYAN</span>}
         {saiyan && saiyanSource && (
           <span className="text-[9px] font-mono px-1.5 py-0.5 rounded flex-shrink-0" style={{
@@ -81,9 +87,11 @@ function AgentInfo({ agent, isBusy, displayName, accent, agoLabel, saiyan, saiya
           </span>
         )}
       </div>
-      <span className="text-[13px] truncate" style={{ color: "#64748B" }}>
-        {agent.preview?.slice(0, 80) || "\u00a0"}
-      </span>
+      {agent.preview && (
+        <span className="text-[13px] truncate" style={{ color: "#64748B" }}>
+          {agent.preview.slice(0, 80)}
+        </span>
+      )}
       {feedLog && feedLog.length > 0 && (
         <div className="flex flex-col gap-0.5 mt-0.5">
           {feedLog.slice(0, 3).map((entry, i) => {
@@ -258,15 +266,17 @@ export const AgentRow = memo(function AgentRow({
           onMouseLeave={isTouch ? undefined : () => hidePreview()}
         >
           <svg viewBox="-40 -50 80 80" width={featured ? 96 : 56} height={featured ? 96 : 56} overflow="visible">
-            <AgentAvatar name={agent.name} target={agent.target} status={agent.status} preview={agent.preview} accent={accent} saiyan={saiyan} onClick={() => {}} />
+            <AgentAvatar name={agent.name} target={agent.target} status={agent.status} preview={agent.preview} accent={accent} saiyan={saiyan} activity={feedLog?.[0]?.text} onClick={() => {}} />
           </svg>
         </div>
 
         {!isTouch && (
-          <MiniMonitor target={agent.target} accent={accent} busy={isBusy}
-            onMouseEnter={(e) => showPreview(agent, accent, roomLabel, e)}
-            onMouseLeave={() => hidePreview()}
-            onClick={(e) => onAgentClick(agent, accent, roomLabel, e)} />
+          <div className="-ml-3">
+            <MiniMonitor target={agent.target} accent={accent} busy={isBusy}
+              onMouseEnter={(e) => showPreview(agent, accent, roomLabel, e)}
+              onMouseLeave={() => hidePreview()}
+              onClick={(e) => onAgentClick(agent, accent, roomLabel, e)} />
+          </div>
         )}
 
         <AgentInfo agent={agent} isBusy={isBusy} displayName={displayName} accent={accent}

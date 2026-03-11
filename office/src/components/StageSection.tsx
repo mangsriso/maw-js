@@ -3,12 +3,14 @@ import { AgentAvatar } from "./AgentAvatar";
 import { roomStyle } from "../lib/constants";
 import type { RecentEntry } from "../lib/store";
 import type { AgentState } from "../lib/types";
+import type { FeedLogEntry } from "./FleetGrid";
 
 interface StageSectionProps {
   busyAgents: AgentState[];
   recentlyActive: (AgentState | RecentEntry)[];
   saiyanTargets: Set<string>;
   recentMap: Record<string, RecentEntry>;
+  getAgentFeedLog?: (name: string) => FeedLogEntry[] | null;
   showPreview: (agent: AgentState, accent: string, label: string, e: React.MouseEvent) => void;
   hidePreview: () => void;
   onAgentClick: (agent: AgentState, accent: string, label: string, e: React.MouseEvent) => void;
@@ -33,6 +35,7 @@ export const StageSection = memo(function StageSection({
   recentlyActive,
   saiyanTargets,
   recentMap,
+  getAgentFeedLog,
   showPreview,
   hidePreview,
   onAgentClick,
@@ -166,6 +169,7 @@ export const StageSection = memo(function StageSection({
             const rs = roomStyle(agent.session);
             const isSaiyan = saiyanTargets.has(agent.target);
             const displayName = agent.name.replace(/-oracle$/, "").replace(/-/g, " ");
+            const feedLog = getAgentFeedLog?.(agent.name);
             return (
               <div
                 key={`stage-${agent.target}`}
@@ -187,6 +191,7 @@ export const StageSection = memo(function StageSection({
                     preview={agent.preview}
                     accent={rs.accent}
                     saiyan={isSaiyan}
+                    activity={feedLog?.[0]?.text}
                     onClick={() => {}}
                   />
                 </svg>

@@ -7,6 +7,9 @@ body {
   overflow-x: hidden;
 }
 
+/* All clickable elements show hand cursor */
+button, [role="button"], a[href], summary { cursor: pointer; }
+
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: #020208; }
 ::-webkit-scrollbar-thumb { background: #2a2a3e; border-radius: 3px; }
@@ -41,6 +44,15 @@ body {
 @keyframes saiyan-particle {
   0% { cy: 30; opacity: 1; r: 2.5; }
   100% { cy: -90; opacity: 0; r: 0.5; }
+}
+
+/* Chibi spin (busy avatars) */
+@keyframes chibi-spin {
+  0% { transform: scaleX(1); }
+  25% { transform: scaleX(0.15); }
+  50% { transform: scaleX(-1); }
+  75% { transform: scaleX(0.15); }
+  100% { transform: scaleX(1); }
 }
 
 /* Hover preview card */

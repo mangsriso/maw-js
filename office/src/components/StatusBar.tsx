@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, type ReactNode } from "react";
 
 interface StatusBarProps {
   connected: boolean;
@@ -8,6 +8,7 @@ interface StatusBarProps {
   onJump?: () => void;
   muted?: boolean;
   onToggleMute?: () => void;
+  children?: ReactNode;
 }
 
 const NAV_ITEMS = [
@@ -20,9 +21,9 @@ const NAV_ITEMS = [
 
 const isTouch = typeof window !== "undefined" && ("ontouchstart" in window || navigator.maxTouchPoints > 0);
 
-export const StatusBar = memo(function StatusBar({ connected, agentCount, sessionCount, activeView = "office", onJump, muted, onToggleMute }: StatusBarProps) {
+export const StatusBar = memo(function StatusBar({ connected, agentCount, sessionCount, activeView = "office", onJump, muted, onToggleMute, children }: StatusBarProps) {
   return (
-    <header className="sticky top-0 z-20 flex flex-wrap items-center gap-x-4 gap-y-2 mx-4 sm:mx-6 mt-3 px-4 sm:px-6 py-2.5 rounded-2xl bg-black/50 backdrop-blur-xl border border-white/[0.06] shadow-[0_4px_30px_rgba(0,0,0,0.4)]">
+    <header className="sticky top-0 z-20 flex flex-wrap items-center gap-x-3 gap-y-2 mx-4 sm:mx-6 mt-3 px-4 sm:px-6 py-2.5 rounded-2xl bg-black/50 backdrop-blur-xl border border-white/[0.06] shadow-[0_4px_30px_rgba(0,0,0,0.4)]">
       <h1 className="text-base sm:text-lg font-bold tracking-[4px] sm:tracking-[6px] text-cyan-400 uppercase whitespace-nowrap">
         {activeView === "fleet" ? "Oracle Fleet" : activeView === "mission" ? "Oracle Mission" : activeView === "overview" ? "Oracle Overview" : "Oracle Office"}
       </h1>
@@ -39,10 +40,13 @@ export const StatusBar = memo(function StatusBar({ connected, agentCount, sessio
         <strong className="text-purple-400">{sessionCount}</strong> rooms
       </span>
 
+      {/* View-specific controls injected by parent */}
+      {children}
+
       {onToggleMute && (
         <button
           onClick={onToggleMute}
-          className="px-2.5 py-1.5 rounded-lg text-xs font-mono cursor-pointer active:scale-95 transition-all whitespace-nowrap"
+          className="px-2.5 py-1.5 rounded-lg text-xs font-mono active:scale-95 transition-all whitespace-nowrap"
           style={{
             background: muted ? "rgba(239,83,80,0.15)" : "rgba(76,175,80,0.15)",
             color: muted ? "#ef5350" : "#4caf50",
@@ -57,11 +61,11 @@ export const StatusBar = memo(function StatusBar({ connected, agentCount, sessio
       {isTouch && onJump && (
         <button
           onClick={onJump}
-          className="px-3 py-1.5 rounded-lg text-xs font-mono font-bold cursor-pointer active:scale-95 transition-all whitespace-nowrap"
+          className="px-3 py-1.5 rounded-lg text-xs font-mono font-bold active:scale-95 transition-all whitespace-nowrap"
           style={{ background: "rgba(34,211,238,0.15)", color: "#22d3ee", border: "1px solid rgba(34,211,238,0.25)" }}
           title="Jump to agent (⌘J)"
         >
-          ⌘J Jump
+          ⌘J
         </button>
       )}
 

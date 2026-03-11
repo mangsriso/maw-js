@@ -6,7 +6,7 @@ import { StatusBar } from "./components/StatusBar";
 import { RoomGrid } from "./components/RoomGrid";
 import { TerminalModal } from "./components/TerminalModal";
 import { MissionControl } from "./components/MissionControl";
-import { FleetGrid } from "./components/FleetGrid";
+import { FleetGrid, FleetControls } from "./components/FleetGrid";
 import { OverviewGrid } from "./components/OverviewGrid";
 import { ShortcutOverlay } from "./components/ShortcutOverlay";
 import { JumpOverlay } from "./components/JumpOverlay";
@@ -147,7 +147,9 @@ export function App() {
     return (
       <div className="relative min-h-screen" style={{ background: "#020208" }}>
         <div className="relative z-10">
-          <StatusBar connected={connected} agentCount={agents.length} sessionCount={sessions.length} activeView="fleet" onJump={() => setShowJump(true)} muted={muted} onToggleMute={toggleMuted} />
+          <StatusBar connected={connected} agentCount={agents.length} sessionCount={sessions.length} activeView="fleet" onJump={() => setShowJump(true)} muted={muted} onToggleMute={toggleMuted}>
+            <FleetControls agents={agents} send={send} />
+          </StatusBar>
         </div>
         <FleetGrid
           sessions={sessions}

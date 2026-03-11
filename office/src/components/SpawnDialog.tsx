@@ -1,4 +1,16 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useEffect } from "react";
+import { guessCommand } from "../lib/constants";
+
+interface FleetWindow {
+  name: string;
+  repo: string;
+}
+
+interface FleetConfig {
+  name: string;
+  windows: FleetWindow[];
+  skip_command?: boolean;
+}
 
 interface SpawnDialogProps {
   sessions: string[];
@@ -8,104 +20,94 @@ interface SpawnDialogProps {
 }
 
 export function SpawnDialog({ sessions, defaultSession, send, onClose }: SpawnDialogProps) {
-  const [session, setSession] = useState(defaultSession);
-  const [name, setName] = useState("");
-  const [command, setCommand] = useState("claude");
-  const [cwd, setCwd] = useState("");
-  const nameRef = useRef<HTMLInputElement>(null);
+  const [configs, setConfigs] = useState<FleetConfig[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  useEffect(() => { nameRef.current?.focus(); }, []);
+  useEffect(() => {
+    fetch("/api/fleet-config")
+      .then(r => r.json())
+      .then(data => { setConfigs(data.configs || []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
 
-  const handleSpawn = () => {
-    if (!name.trim()) return;
-    send({
-      type: "spawn",
-      session,
-      name: name.trim(),
-      command: command || undefined,
-      cwd: cwd.trim() || undefined,
-    });
+  // Flat list of all windows grouped by session
+  const presets = configs.flatMap(c =>
+    c.windows.map(w => ({ session: c.name, window: w.name, repo: w.repo, skipCmd: c.skip_command }))
+  );
+
+  // Find which session config matches defaultSession (the room user clicked "+" on)
+  const matchingConfig = configs.find(c => c.name === defaultSession);
+
+  const handleSpawn = (session: string, windowName: string, skipCmd?: boolean) => {
+    const cmd = skipCmd ? "" : guessCommand(windowName);
+    send({ type: "spawn", session, name: windowName, command: cmd });
     onClose();
   };
 
   return (
     <>
-      {/* Backdrop */}
       <div className="fixed inset-0" style={{ zIndex: 50, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(2px)" }} onClick={onClose} />
-      {/* Dialog */}
       <div className="fixed" style={{
-        zIndex: 51,
-        left: "50%", top: "50%", transform: "translate(-50%, -50%)",
-        width: 380, background: "#16161e", borderRadius: 16,
-        border: "1px solid rgba(255,255,255,0.1)",
-        boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
+        zIndex: 51, left: "50%", top: "50%", transform: "translate(-50%, -50%)",
+        width: 420, maxHeight: "70vh", background: "#16161e", borderRadius: 16,
+        border: "1px solid rgba(255,255,255,0.1)", boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
+        display: "flex", flexDirection: "column",
       }}>
-        <div className="px-6 py-5 border-b border-white/[0.06]">
+        <div className="px-6 py-4 border-b border-white/[0.06] flex items-center justify-between">
           <h2 className="text-base font-bold text-white/90 tracking-wide">Spawn Agent</h2>
+          <button onClick={onClose} className="text-white/30 hover:text-white/60 text-lg transition-colors">&times;</button>
         </div>
-        <div className="flex flex-col gap-4 px-6 py-5">
-          {/* Session */}
-          <label className="flex flex-col gap-1.5">
-            <span className="text-[11px] font-mono text-white/40 uppercase tracking-wider">Session</span>
-            <select value={session} onChange={e => setSession(e.target.value)}
-              className="px-3 py-2.5 rounded-lg text-[14px] text-white outline-none"
-              style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", WebkitAppearance: "none" as const }}>
-              {sessions.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </label>
-          {/* Name */}
-          <label className="flex flex-col gap-1.5">
-            <span className="text-[11px] font-mono text-white/40 uppercase tracking-wider">Window Name</span>
-            <input ref={nameRef} type="text" value={name} onChange={e => setName(e.target.value)}
-              onKeyDown={e => { if (e.key === "Enter") handleSpawn(); if (e.key === "Escape") onClose(); }}
-              placeholder="e.g. claude-zeta"
-              className="px-3 py-2.5 rounded-lg text-[14px] text-white outline-none placeholder:text-white/20 [&::-webkit-search-cancel-button]:hidden [&::-webkit-clear-button]:hidden [&::-ms-clear]:hidden"
-              style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", WebkitAppearance: "none" as const }}
-              autoComplete="off" autoCorrect="off" />
-          </label>
-          {/* Command */}
-          <label className="flex flex-col gap-1.5">
-            <span className="text-[11px] font-mono text-white/40 uppercase tracking-wider">Command</span>
-            <div className="flex gap-2">
-              {["claude", "codex", ""].map(c => (
-                <button key={c} onClick={() => setCommand(c)}
-                  className="px-3 py-2 rounded-lg text-[12px] font-mono cursor-pointer transition-colors"
-                  style={{
-                    background: command === c ? "rgba(34,197,94,0.2)" : "rgba(255,255,255,0.04)",
-                    color: command === c ? "#22c55e" : "#94A3B8",
-                    border: command === c ? "1px solid rgba(34,197,94,0.3)" : "1px solid rgba(255,255,255,0.06)",
-                  }}>
-                  {c || "shell"}
+
+        <div className="flex-1 overflow-y-auto">
+          {loading && (
+            <div className="px-6 py-8 text-center text-white/30 text-sm font-mono">Loading presets...</div>
+          )}
+
+          {/* If opened from a specific room, show that room's windows first */}
+          {matchingConfig && (
+            <div className="border-b border-white/[0.04]">
+              <div className="px-6 py-2 text-[10px] font-mono text-white/30 uppercase tracking-[2px]">
+                {matchingConfig.name}
+              </div>
+              {matchingConfig.windows.map(w => (
+                <button key={`${matchingConfig.name}:${w.name}`}
+                  className="w-full flex items-center gap-3 px-6 py-3 hover:bg-white/[0.03] transition-colors text-left"
+                  onClick={() => handleSpawn(matchingConfig.name, w.name, matchingConfig.skip_command)}>
+                  <span className="w-2 h-2 rounded-full bg-emerald-400/60 flex-shrink-0" />
+                  <span className="text-[13px] font-mono text-white/80 flex-1 truncate">{w.name}</span>
+                  <span className="text-[10px] font-mono text-white/20 truncate max-w-[160px]">{w.repo}</span>
                 </button>
               ))}
             </div>
-          </label>
-          {/* CWD */}
-          <label className="flex flex-col gap-1.5">
-            <span className="text-[11px] font-mono text-white/40 uppercase tracking-wider">Working Dir <span className="text-white/20">(optional)</span></span>
-            <input type="text" value={cwd} onChange={e => setCwd(e.target.value)}
-              onKeyDown={e => { if (e.key === "Enter") handleSpawn(); if (e.key === "Escape") onClose(); }}
-              placeholder="/path/to/project"
-              className="px-3 py-2.5 rounded-lg text-[14px] text-white outline-none placeholder:text-white/20 [&::-webkit-search-cancel-button]:hidden [&::-webkit-clear-button]:hidden [&::-ms-clear]:hidden"
-              style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", WebkitAppearance: "none" as const }}
-              autoComplete="off" autoCorrect="off" />
-          </label>
+          )}
+
+          {/* All other sessions */}
+          {configs.filter(c => c.name !== defaultSession).map(c => (
+            <div key={c.name} className="border-b border-white/[0.04]">
+              <div className="px-6 py-2 text-[10px] font-mono text-white/30 uppercase tracking-[2px]">
+                {c.name}
+              </div>
+              {c.windows.map(w => (
+                <button key={`${c.name}:${w.name}`}
+                  className="w-full flex items-center gap-3 px-6 py-3 hover:bg-white/[0.03] transition-colors text-left"
+                  onClick={() => handleSpawn(c.name, w.name, c.skip_command)}>
+                  <span className="w-2 h-2 rounded-full bg-white/20 flex-shrink-0" />
+                  <span className="text-[13px] font-mono text-white/80 flex-1 truncate">{w.name}</span>
+                  <span className="text-[10px] font-mono text-white/20 truncate max-w-[160px]">{w.repo}</span>
+                </button>
+              ))}
+            </div>
+          ))}
+
+          {!loading && configs.length === 0 && (
+            <div className="px-6 py-8 text-center text-white/30 text-sm font-mono">
+              No fleet configs found in fleet/
+            </div>
+          )}
         </div>
-        <div className="flex justify-end gap-3 px-6 py-4 border-t border-white/[0.06]">
-          <button onClick={onClose}
-            className="px-4 py-2.5 rounded-lg text-[13px] font-mono cursor-pointer transition-colors"
-            style={{ color: "#94A3B8", background: "rgba(255,255,255,0.04)" }}>
-            Cancel
-          </button>
-          <button onClick={handleSpawn} disabled={!name.trim()}
-            className="px-5 py-2.5 rounded-lg text-[13px] font-mono font-bold cursor-pointer transition-all active:scale-95"
-            style={{
-              background: name.trim() ? "rgba(34,197,94,0.2)" : "rgba(255,255,255,0.04)",
-              color: name.trim() ? "#22c55e" : "#64748B",
-              border: name.trim() ? "1px solid rgba(34,197,94,0.3)" : "1px solid rgba(255,255,255,0.06)",
-            }}>
-            Spawn
-          </button>
+
+        <div className="px-6 py-3 border-t border-white/[0.06] text-[9px] font-mono text-white/20">
+          Presets from fleet/*.json
         </div>
       </div>
     </>

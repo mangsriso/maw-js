@@ -13,6 +13,65 @@ import { describeActivity, type FeedEvent } from "../lib/feed";
 
 export type FeedLogEntry = { text: string; ts: number };
 
+/** Fleet-specific controls for StatusBar — reads from Zustand, takes agents for counts */
+export function FleetControls({ agents, send }: { agents: AgentState[]; send: (msg: object) => void }) {
+  const { sortMode, setSortMode } = useFleetStore();
+  const busyCount = agents.filter(a => a.status === "busy").length;
+  const readyCount = agents.filter(a => a.status === "ready").length;
+  const idleCount = agents.length - busyCount - readyCount;
+
+  const wakeAll = () => {
+    for (const a of agents) {
+      if (a.status === "idle") send({ type: "wake", target: a.target, command: guessCommand(a.name) });
+    }
+  };
+  const sleepAll = () => {
+    if (!confirm("Sleep all busy agents?")) return;
+    for (const a of agents) {
+      if (a.status === "busy") send({ type: "sleep", target: a.target });
+    }
+  };
+
+  return (
+    <>
+      {busyCount > 0 && (
+        <span className="flex items-center gap-1.5 text-xs font-mono whitespace-nowrap">
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shadow-[0_0_6px_#ffa726] animate-pulse" />
+          <span className="text-amber-400">{busyCount}</span>
+        </span>
+      )}
+      <span className="flex items-center gap-1.5 text-xs font-mono whitespace-nowrap">
+        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+        <span className="text-emerald-400">{readyCount}</span>
+      </span>
+      {idleCount > 0 && (
+        <span className="flex items-center gap-1.5 text-xs font-mono whitespace-nowrap">
+          <span className="w-1.5 h-1.5 rounded-full bg-white/20" />
+          <span className="text-white/30">{idleCount}</span>
+        </span>
+      )}
+      {idleCount > 0 && (
+        <button className="px-2 py-1 text-[10px] font-mono font-bold rounded-md active:scale-95 transition-all whitespace-nowrap"
+          style={{ background: "rgba(34,197,94,0.15)", color: "#22c55e" }}
+          onClick={wakeAll} title="Wake all idle agents">Wake</button>
+      )}
+      {busyCount > 0 && (
+        <button className="px-2 py-1 text-[10px] font-mono font-bold rounded-md active:scale-95 transition-all whitespace-nowrap"
+          style={{ background: "rgba(251,191,36,0.1)", color: "#fbbf24" }}
+          onClick={sleepAll} title="Sleep all busy agents">Sleep</button>
+      )}
+      <div className="flex items-center rounded-md overflow-hidden border border-white/[0.08]">
+        <button className="px-2 py-0.5 text-[10px] font-mono transition-colors whitespace-nowrap"
+          style={{ background: sortMode === "active" ? "rgba(251,191,36,0.15)" : "transparent", color: sortMode === "active" ? "#fbbf24" : "#64748B" }}
+          onClick={() => setSortMode("active")}>Active</button>
+        <button className="px-2 py-0.5 text-[10px] font-mono transition-colors whitespace-nowrap"
+          style={{ background: sortMode === "name" ? "rgba(255,255,255,0.08)" : "transparent", color: sortMode === "name" ? "#E2E8F0" : "#64748B" }}
+          onClick={() => setSortMode("name")}>Room</button>
+      </div>
+    </>
+  );
+}
+
 interface FleetGridProps {
   sessions: Session[];
   agents: AgentState[];
@@ -182,19 +241,6 @@ export const FleetGrid = memo(function FleetGrid({
     for (const a of ra) send({ type: "stop", target: a.target });
   }, [sessionAgents, send]);
 
-  const wakeAll = useCallback(() => {
-    for (const a of agents) {
-      if (a.status === "idle") send({ type: "wake", target: a.target, command: guessCommand(a.name) });
-    }
-  }, [agents, send]);
-
-  const sleepAll = useCallback(() => {
-    if (!confirm("Sleep all busy agents?")) return;
-    for (const a of agents) {
-      if (a.status === "busy") send({ type: "sleep", target: a.target });
-    }
-  }, [agents, send]);
-
   const sorted = useMemo(() => sortRooms(sessions, sessionAgents, sortMode), [sessions, sessionAgents, sortMode]);
 
   type VRoom = { key: string; label: string; accent: string; floor: string; agents: AgentState[]; hasBusy: boolean; busyCount: number };
@@ -232,9 +278,6 @@ export const FleetGrid = memo(function FleetGrid({
   }, [agentFeedLog]);
 
   const busyAgents = useMemo(() => agents.filter(a => a.status === "busy"), [agents]);
-  const busyCount = busyAgents.length;
-  const readyCount = agents.filter(a => a.status === "ready").length;
-  const idleCount = agents.length - busyCount - readyCount;
 
   // Recently active: busy agents first, then recently-gone from store
   // Deduplicated by agent name (same agent may have multiple tmux windows)
@@ -269,68 +312,13 @@ export const FleetGrid = memo(function FleetGrid({
 
   return (
     <div ref={containerRef} className="relative w-full min-h-screen" style={{ background: "#0a0a12" }}>
-      {/* Summary bar */}
-      <div className="max-w-5xl mx-auto flex items-center justify-between px-8 py-5 border-b border-white/[0.06]">
-        <div className="flex items-center gap-4 text-sm font-mono">
-          <span className="text-white/30 text-[10px] tracking-[4px] uppercase">Fleet</span>
-          <span className="text-white/60">{sessions.length} rooms</span>
-          <span className="text-white/20">/</span>
-          <span className="text-white/60">{agents.length} agents</span>
-          <span className="text-white/20">/</span>
-          <span style={{ color: fps >= 50 ? "#4caf50" : fps >= 30 ? "#ffa726" : "#ef5350" }}>{fps} fps</span>
-        </div>
-        <div className="flex items-center gap-5 text-sm font-mono">
-          {busyCount > 0 && (
-            <span className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-amber-400 shadow-[0_0_8px_#ffa726] animate-pulse" />
-              <span className="text-amber-400">{busyCount} busy</span>
-            </span>
-          )}
-          <span className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_4px_#4caf50]" />
-            <span className="text-emerald-400">{readyCount} ready</span>
-          </span>
-          {idleCount > 0 && (
-            <span className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-white/20" />
-              <span className="text-white/30">{idleCount} idle</span>
-            </span>
-          )}
-          <span className="text-white/10">|</span>
-          <div className="flex items-center gap-2">
-            {idleCount > 0 && (
-              <button className="px-3 py-1.5 text-[10px] font-mono font-bold rounded-lg cursor-pointer transition-all active:scale-95"
-                style={{ background: "rgba(34,197,94,0.15)", color: "#22c55e", border: "1px solid rgba(34,197,94,0.2)" }}
-                onClick={wakeAll} title="Wake all idle agents">
-                Wake All
-              </button>
-            )}
-            {busyCount > 0 && (
-              <button className="px-3 py-1.5 text-[10px] font-mono font-bold rounded-lg cursor-pointer transition-all active:scale-95"
-                style={{ background: "rgba(251,191,36,0.1)", color: "#fbbf24", border: "1px solid rgba(251,191,36,0.15)" }}
-                onClick={sleepAll} title="Sleep all busy agents">
-                Sleep All
-              </button>
-            )}
-          </div>
-          <span className="text-white/10">|</span>
-          <div className="flex items-center rounded-lg overflow-hidden border border-white/[0.08]">
-            <button className="px-3 py-1 text-[10px] font-mono cursor-pointer transition-colors duration-150"
-              style={{ background: sortMode === "active" ? "rgba(251,191,36,0.15)" : "transparent", color: sortMode === "active" ? "#fbbf24" : "#64748B" }}
-              onClick={() => setSortMode("active")}>Active first</button>
-            <button className="px-3 py-1 text-[10px] font-mono cursor-pointer transition-colors duration-150"
-              style={{ background: sortMode === "name" ? "rgba(255,255,255,0.08)" : "transparent", color: sortMode === "name" ? "#E2E8F0" : "#64748B" }}
-              onClick={() => setSortMode("name")}>By room</button>
-          </div>
-        </div>
-      </div>
-
       {/* Stage */}
       <StageSection
         busyAgents={busyAgents}
         recentlyActive={recentlyActive}
         saiyanTargets={saiyanTargets}
         recentMap={recentMap}
+        getAgentFeedLog={getAgentFeedLog}
         showPreview={showPreview}
         hidePreview={hidePreview}
         onAgentClick={onAgentClick}

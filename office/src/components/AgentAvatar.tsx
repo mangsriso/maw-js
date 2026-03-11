@@ -15,10 +15,11 @@ interface AgentAvatarProps {
   preview: string;
   accent: string;
   saiyan?: boolean;
+  activity?: string;
   onClick: () => void;
 }
 
-export const AgentAvatar = memo(function AgentAvatar({ name, target, status, preview, accent, saiyan, onClick }: AgentAvatarProps) {
+export const AgentAvatar = memo(function AgentAvatar({ name, target, status, preview, accent, saiyan, activity, onClick }: AgentAvatarProps) {
   const color = agentColor(name);
   const fx = STATUS_FX[status];
   const filterId = `glow-${target.replace(/[^a-z0-9]/gi, "-")}`;
@@ -129,6 +130,9 @@ export const AgentAvatar = memo(function AgentAvatar({ name, target, status, pre
       <ellipse cx={0} cy={24} rx={16} ry={4}
         fill={status === "idle" ? "#333" : fx.color}
         opacity={status === "idle" ? 0.3 : 0.2} />
+
+      {/* Chibi body group — spins when busy */}
+      <g style={fx.typing ? { animation: "chibi-spin 3s ease-in-out infinite", transformOrigin: "0 0" } : {}}>
 
       {/* === CHIBI BODY (small hoodie) === */}
       <rect x={-12} y={6} width={24} height={18} rx={8}
@@ -244,6 +248,8 @@ export const AgentAvatar = memo(function AgentAvatar({ name, target, status, pre
       <ellipse cx={-7} cy={29} rx={3.5} ry={2} fill="#333" />
       <ellipse cx={7} cy={29} rx={3.5} ry={2} fill="#333" />
 
+      </g>{/* end chibi-spin group */}
+
       {/* Status dot */}
       {status !== "idle" && (
         <circle cx={16} cy={-28} r={5} fill={fx.color} opacity={0.4} filter={`url(#${filterId})`} />
@@ -253,8 +259,32 @@ export const AgentAvatar = memo(function AgentAvatar({ name, target, status, pre
 
       {/* Name label removed — rendered as HTML in AgentCard */}
 
-      {/* Floating code (busy) */}
-      {fx.typing && preview && (
+      {/* Name speech bubble above head (cartoon style) */}
+      {(() => {
+        const featureTop = hasAntenna ? -45 : hasEars ? -36 : -32;
+        const bubbleGap = 2;
+        const bubbleH = 11;
+        const bubbleY = featureTop - bubbleGap - bubbleH;
+        const tailY = featureTop - bubbleGap;
+        const bubbleW = Math.min(80, shortName.length * 6 + 16);
+        return (
+          <g style={{ pointerEvents: "none" }}>
+            <rect x={-bubbleW / 2} y={bubbleY} width={bubbleW} height={bubbleH}
+              rx={4} ry={4} fill="rgba(0,0,0,0.65)" stroke={accent} strokeWidth={0.5} strokeOpacity={0.3} />
+            <polygon
+              points={`-3,${tailY} 3,${tailY} 0,${tailY + 4}`}
+              fill="rgba(0,0,0,0.65)" stroke={accent} strokeWidth={0.5} strokeOpacity={0.3}
+            />
+            <rect x={-4} y={tailY - 1} width={8} height={2} fill="rgba(0,0,0,0.65)" />
+            <text x={0} y={bubbleY + bubbleH / 2 + 2.5} textAnchor="middle"
+              fill={accent} fontSize={7} fontFamily="'SF Mono', monospace" opacity={0.9}>
+              {shortName}
+            </text>
+          </g>
+        );
+      })()}
+      {/* Floating code (busy, no activity) */}
+      {fx.typing && preview && !activity && (
         <foreignObject x={-65} y={-70} width={130} height={20} style={{ pointerEvents: "none" }}>
           <div style={{
             animation: "float-code 3s ease-in-out infinite",
