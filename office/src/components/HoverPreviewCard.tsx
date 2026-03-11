@@ -155,11 +155,31 @@ export const HoverPreviewCard = memo(function HoverPreviewCard({
     return () => { active = false; };
   }, [agent.target]);
 
-  // Auto-scroll to bottom
+  // Auto-scroll to bottom — smooth when pinned, instant on hover
+  const userScrolledRef = useRef(false);
   useEffect(() => {
     const el = termRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [content]);
+    if (!el) return;
+    // If user scrolled up in pinned mode, don't force scroll
+    if (pinned && userScrolledRef.current) return;
+    if (pinned) {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    } else {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [content, pinned]);
+
+  // Detect user scroll-up to pause auto-scroll (re-enable when near bottom)
+  useEffect(() => {
+    const el = termRef.current;
+    if (!el || !pinned) return;
+    const onScroll = () => {
+      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+      userScrolledRef.current = !nearBottom;
+    };
+    el.addEventListener("scroll", onScroll);
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [pinned]);
 
   // Deterministic chibi features (same logic as AgentAvatar)
   let h = 0;

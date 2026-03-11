@@ -1,9 +1,11 @@
 import { memo, useMemo, useState, useEffect, useRef, useCallback } from "react";
-import { AgentAvatar } from "./AgentAvatar";
 import { HoverPreviewCard } from "./HoverPreviewCard";
+import { StageSection } from "./StageSection";
+import { AgentRow } from "./AgentRow";
 import { roomStyle, PREVIEW_CARD } from "../lib/constants";
 import { BottomStats } from "./BottomStats";
 import { useFps } from "./FpsCounter";
+import { useFleetStore, RECENT_TTL_MS } from "../lib/store";
 import type { AgentState, Session, AgentEvent } from "../lib/types";
 
 interface FleetGridProps {
@@ -47,10 +49,7 @@ function useVisibleTargets(send: (msg: object) => void) {
       },
       { rootMargin: "100px" }
     );
-    return () => {
-      observerRef.current?.disconnect();
-      clearTimeout(debounceRef.current);
-    };
+    return () => { observerRef.current?.disconnect(); clearTimeout(debounceRef.current); };
   }, [syncToServer]);
 
   const observe = useCallback((el: HTMLElement | null, target: string) => {
@@ -62,33 +61,39 @@ function useVisibleTargets(send: (msg: object) => void) {
   return observe;
 }
 
-function sortRooms(sessions: Session[], agentMap: Map<string, AgentState[]>) {
+function sortRooms(sessions: Session[], agentMap: Map<string, AgentState[]>, mode: "active" | "name") {
   return [...sessions].sort((a, b) => {
-    const aAgents = agentMap.get(a.name) || [];
-    const bAgents = agentMap.get(b.name) || [];
-    const aBusy = aAgents.filter(ag => ag.status === "busy").length;
-    const bBusy = bAgents.filter(ag => ag.status === "busy").length;
-    if (aBusy !== bBusy) return bBusy - aBusy;
-    if (aAgents.length !== bAgents.length) return bAgents.length - aAgents.length;
+    if (mode === "active") {
+      const aBusy = (agentMap.get(a.name) || []).filter(ag => ag.status === "busy").length;
+      const bBusy = (agentMap.get(b.name) || []).filter(ag => ag.status === "busy").length;
+      if (aBusy !== bBusy) return bBusy - aBusy;
+      const aLen = (agentMap.get(a.name) || []).length;
+      const bLen = (agentMap.get(b.name) || []).length;
+      if (aLen !== bLen) return bLen - aLen;
+    }
     return a.name.localeCompare(b.name);
   });
 }
 
 export const FleetGrid = memo(function FleetGrid({
-  sessions,
-  agents,
-  saiyanTargets,
-  connected,
-  send,
-  onSelectAgent,
-  eventLog,
-  addEvent,
+  sessions, agents, saiyanTargets, connected, send, onSelectAgent, eventLog, addEvent,
 }: FleetGridProps) {
   const fps = useFps();
   const observe = useVisibleTargets(send);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // --- All state declarations first (avoid TDZ issues) ---
+  // --- Zustand store ---
+  const { recentMap, markBusy, pruneRecent, sortMode, setSortMode, grouped, toggleGrouped, collapsed, toggleCollapsed } = useFleetStore();
+  const isCollapsed = useCallback((key: string) => collapsed.includes(key), [collapsed]);
+
+  // Sync busy agents to store
+  useEffect(() => {
+    const busyTargets = agents.filter(a => a.status === "busy").map(a => a.target);
+    if (busyTargets.length > 0) markBusy(busyTargets);
+    pruneRecent();
+  }, [agents, markBusy, pruneRecent]);
+
+  // --- Preview state ---
   type PreviewInfo = { agent: AgentState; accent: string; label: string; pos: { x: number; y: number } };
   const [hoverPreview, setHoverPreview] = useState<PreviewInfo | null>(null);
   const hoverTimeout = useRef<ReturnType<typeof setTimeout>>();
@@ -101,138 +106,94 @@ export const FleetGrid = memo(function FleetGrid({
     setInputBufs(prev => ({ ...prev, [target]: val }));
   }, []);
 
-  // --- Hover callbacks ---
+  // --- Hover/click callbacks ---
   const showPreview = useCallback((agent: AgentState, accent: string, label: string, e: React.MouseEvent) => {
     if (pinnedPreview) return;
     clearTimeout(hoverTimeout.current);
     const cardW = PREVIEW_CARD.width;
-    // X: right of mouse cursor with small gap
     let x = e.clientX + 8;
-    // If card goes off right edge, flip to left of cursor
     if (x + cardW > window.innerWidth - 8) x = e.clientX - cardW - 8;
     if (x < 8) x = 8;
-    // Y: above mouse cursor
-    const y = e.clientY - 120;
-    setHoverPreview({ agent, accent, label, pos: { x, y } });
+    setHoverPreview({ agent, accent, label, pos: { x, y: e.clientY - 120 } });
   }, [pinnedPreview]);
 
   const hidePreview = useCallback(() => {
     hoverTimeout.current = setTimeout(() => setHoverPreview(null), 300);
   }, []);
 
-  const keepPreview = useCallback(() => {
-    clearTimeout(hoverTimeout.current);
-  }, []);
+  const keepPreview = useCallback(() => { clearTimeout(hoverTimeout.current); }, []);
 
-  // Click agent row → pin preview card (start at mouse position)
   const onAgentClick = useCallback((agent: AgentState, accent: string, label: string, e: React.MouseEvent) => {
-    if (pinnedPreview) return;
-    const cardW = PREVIEW_CARD.width;
-    let x = e.clientX + 8;
-    if (x + cardW > window.innerWidth - 8) x = e.clientX - cardW - 8;
-    if (x < 8) x = 8;
-    const pos = { x, y: e.clientY };
-    setPinnedPreview({ agent, accent, label, pos });
+    e.stopPropagation();
+    if (pinnedPreview && pinnedPreview.agent.target === agent.target) { setPinnedPreview(null); return; }
+    setPinnedPreview({ agent, accent, label, pos: { x: e.clientX, y: e.clientY } });
     setHoverPreview(null);
     send({ type: "subscribe", target: agent.target });
   }, [pinnedPreview, send]);
 
-  // Animate pinned card: start at row viewport pos, slide to viewport center
   useEffect(() => {
     if (pinnedPreview) {
-      // Start at hover position (already viewport coords)
-      setPinnedAnimPos({ left: pinnedPreview.pos.x, top: pinnedPreview.pos.y });
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          setPinnedAnimPos({ left: (window.innerWidth - PREVIEW_CARD.width) / 2, top: 80 });
-        });
+      setPinnedAnimPos({
+        left: (window.innerWidth - PREVIEW_CARD.width) / 2,
+        top: Math.max(40, (window.innerHeight - PREVIEW_CARD.maxHeight) / 2),
       });
-    } else {
-      setPinnedAnimPos(null);
-    }
+    } else { setPinnedAnimPos(null); }
   }, [pinnedPreview]);
 
   const onPinnedFullscreen = useCallback(() => {
-    if (pinnedPreview) {
-      const agent = pinnedPreview.agent;
-      setPinnedPreview(null);
-      setTimeout(() => onSelectAgent(agent), 150);
-    }
+    if (pinnedPreview) { const a = pinnedPreview.agent; setPinnedPreview(null); setTimeout(() => onSelectAgent(a), 150); }
   }, [pinnedPreview, onSelectAgent]);
-
   const onPinnedClose = useCallback(() => setPinnedPreview(null), []);
 
-  // Click outside pinned card to close
-  useEffect(() => {
-    if (!pinnedPreview) return;
-    const handler = (e: MouseEvent) => {
-      if (pinnedRef.current && !pinnedRef.current.contains(e.target as Node)) {
-        setPinnedPreview(null);
-      }
-    };
-    const t = setTimeout(() => document.addEventListener("mousedown", handler), 50);
-    return () => { clearTimeout(t); document.removeEventListener("mousedown", handler); };
-  }, [pinnedPreview]);
-
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const toggle = (name: string) => setCollapsed(prev => {
-    const next = new Set(prev);
-    next.has(name) ? next.delete(name) : next.add(name);
-    return next;
-  });
-  const [grouped, setGrouped] = useState(true);
-
+  // --- Computed data ---
   const sessionAgents = useMemo(() => {
     const map = new Map<string, AgentState[]>();
-    for (const a of agents) {
-      const arr = map.get(a.session) || [];
-      arr.push(a);
-      map.set(a.session, arr);
-    }
+    for (const a of agents) { const arr = map.get(a.session) || []; arr.push(a); map.set(a.session, arr); }
     return map;
   }, [agents]);
 
-  const sorted = useMemo(() => sortRooms(sessions, sessionAgents), [sessions, sessionAgents]);
+  const sorted = useMemo(() => sortRooms(sessions, sessionAgents, sortMode), [sessions, sessionAgents, sortMode]);
 
-  // Visual grouping: merge single-agent rooms into "Oracles"
   type VRoom = { key: string; label: string; accent: string; floor: string; agents: AgentState[]; hasBusy: boolean; busyCount: number };
   const visualRooms = useMemo((): VRoom[] => {
     if (!grouped) {
       return sorted.map(s => {
-        const style = roomStyle(s.name);
-        const ra = sessionAgents.get(s.name) || [];
-        const ba = ra.filter(a => a.status === "busy");
-        return { key: s.name, label: s.name, accent: style.accent, floor: style.floor, agents: ra, hasBusy: ba.length > 0, busyCount: ba.length };
+        const st = roomStyle(s.name); const ra = sessionAgents.get(s.name) || []; const ba = ra.filter(a => a.status === "busy");
+        return { key: s.name, label: s.name, accent: st.accent, floor: st.floor, agents: ra, hasBusy: ba.length > 0, busyCount: ba.length };
       });
     }
-    const multi: VRoom[] = [];
-    const soloAgents: AgentState[] = [];
+    const multi: VRoom[] = []; const soloAgents: AgentState[] = [];
     for (const s of sorted) {
-      const style = roomStyle(s.name);
-      const ra = sessionAgents.get(s.name) || [];
-      const ba = ra.filter(a => a.status === "busy");
-      if (ra.length <= 1) {
-        soloAgents.push(...ra);
-      } else {
-        multi.push({ key: s.name, label: s.name, accent: style.accent, floor: style.floor, agents: ra, hasBusy: ba.length > 0, busyCount: ba.length });
-      }
+      const st = roomStyle(s.name); const ra = sessionAgents.get(s.name) || []; const ba = ra.filter(a => a.status === "busy");
+      if (ra.length <= 1) soloAgents.push(...ra);
+      else multi.push({ key: s.name, label: s.name, accent: st.accent, floor: st.floor, agents: ra, hasBusy: ba.length > 0, busyCount: ba.length });
     }
     const result: VRoom[] = [];
     if (soloAgents.length > 0) {
-      const soloBusy = soloAgents.filter(a => a.status === "busy");
-      result.push({ key: "_oracles", label: "Oracles", accent: "#7e57c2", floor: "#1a1428", agents: soloAgents, hasBusy: soloBusy.length > 0, busyCount: soloBusy.length });
+      const sb = soloAgents.filter(a => a.status === "busy");
+      result.push({ key: "_oracles", label: "Oracles", accent: "#7e57c2", floor: "#1a1428", agents: soloAgents, hasBusy: sb.length > 0, busyCount: sb.length });
     }
     result.push(...multi);
     return result;
   }, [sorted, sessionAgents, grouped]);
 
-  const busyCount = agents.filter(a => a.status === "busy").length;
+  const busyAgents = useMemo(() => agents.filter(a => a.status === "busy"), [agents]);
+  const busyCount = busyAgents.length;
   const readyCount = agents.filter(a => a.status === "ready").length;
   const idleCount = agents.length - busyCount - readyCount;
 
+  // Recently active from zustand store
+  const recentlyActive = useMemo(() => {
+    const busyTargets = new Set(busyAgents.map(a => a.target));
+    const now = Date.now();
+    return agents
+      .filter(a => !busyTargets.has(a.target) && recentMap[a.target] && (now - recentMap[a.target]) < RECENT_TTL_MS)
+      .sort((a, b) => (recentMap[b.target] || 0) - (recentMap[a.target] || 0));
+  }, [agents, busyAgents, recentMap]);
+
   return (
     <div ref={containerRef} className="relative w-full min-h-screen" style={{ background: "#0a0a12" }}>
-      {/* Summary */}
+      {/* Summary bar */}
       <div className="max-w-5xl mx-auto flex items-center justify-between px-8 py-5 border-b border-white/[0.06]">
         <div className="flex items-center gap-4 text-sm font-mono">
           <span className="text-white/30 text-[10px] tracking-[4px] uppercase">Fleet</span>
@@ -259,151 +220,91 @@ export const FleetGrid = memo(function FleetGrid({
               <span className="text-white/30">{idleCount} idle</span>
             </span>
           )}
+          <span className="text-white/10">|</span>
+          <div className="flex items-center rounded-lg overflow-hidden border border-white/[0.08]">
+            <button className="px-3 py-1 text-[10px] font-mono cursor-pointer transition-colors duration-150"
+              style={{ background: sortMode === "active" ? "rgba(251,191,36,0.15)" : "transparent", color: sortMode === "active" ? "#fbbf24" : "#64748B" }}
+              onClick={() => setSortMode("active")}>Active first</button>
+            <button className="px-3 py-1 text-[10px] font-mono cursor-pointer transition-colors duration-150"
+              style={{ background: sortMode === "name" ? "rgba(255,255,255,0.08)" : "transparent", color: sortMode === "name" ? "#E2E8F0" : "#64748B" }}
+              onClick={() => setSortMode("name")}>By room</button>
+          </div>
         </div>
       </div>
 
+      {/* Stage */}
+      <StageSection
+        busyAgents={busyAgents}
+        recentlyActive={recentlyActive}
+        saiyanTargets={saiyanTargets}
+        showPreview={showPreview}
+        hidePreview={hidePreview}
+        onAgentClick={onAgentClick}
+      />
+
       {/* Rooms */}
       <div className="max-w-5xl mx-auto flex flex-col px-6 lg:px-8 py-6 gap-4">
-        {visualRooms.map((vr) => {
-          const roomAgents = vr.agents;
-          const hasBusy = vr.hasBusy;
-          const style = { accent: vr.accent, floor: vr.floor };
+        {/* Recently Active group */}
+        {recentlyActive.length > 0 && (
+          <section className="rounded-2xl overflow-hidden" style={{ background: "#12121c", border: "1px solid rgba(251,191,36,0.15)", boxShadow: "0 2px 8px rgba(0,0,0,0.3)" }}>
+            <div className="flex items-center gap-5 px-6 py-4 cursor-pointer select-none" style={{ background: "rgba(251,191,36,0.03)" }}
+              onClick={() => toggleCollapsed("_recent")} role="button" tabIndex={0}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleCollapsed("_recent"); } }}>
+              <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: "#fbbf24", boxShadow: "0 0 6px #fbbf24" }} />
+              <h3 className="text-base font-bold tracking-[4px] uppercase" style={{ color: "#fbbf24" }}>Recently Active</h3>
+              <span className="text-xs font-mono font-bold px-2.5 py-1 rounded-md" style={{ background: "rgba(251,191,36,0.15)", color: "#fbbf24" }}>{recentlyActive.length}</span>
+              <svg width={16} height={16} viewBox="0 0 16 16" fill="none" className="ml-auto flex-shrink-0 transition-transform duration-200"
+                style={{ transform: isCollapsed("_recent") ? "rotate(-90deg)" : "rotate(0deg)" }}>
+                <path d="M4 6l4 4 4-4" stroke="#fbbf24" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" opacity={0.5} />
+              </svg>
+            </div>
+            {!isCollapsed("_recent") && <div className="h-[1px]" style={{ background: "rgba(251,191,36,0.12)" }} />}
+            {!isCollapsed("_recent") && (
+              <div className="flex flex-col">
+                {recentlyActive.map((agent, i) => {
+                  const rs = roomStyle(agent.session);
+                  const ago = Math.round((Date.now() - (recentMap[agent.target] || 0)) / 1000);
+                  return (
+                    <AgentRow key={`recent-${agent.target}`} agent={agent} accent={rs.accent} roomLabel={rs.label}
+                      saiyan={saiyanTargets.has(agent.target)} isLast={i === recentlyActive.length - 1}
+                      agoLabel={ago < 60 ? `${ago}s ago` : `${Math.floor(ago / 60)}m ago`}
+                      observe={observe} showPreview={showPreview} hidePreview={hidePreview} onAgentClick={onAgentClick} />
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        )}
 
+        {/* Room cards */}
+        {visualRooms.map((vr) => {
+          const style = { accent: vr.accent, floor: vr.floor };
           return (
-            <section
-              key={vr.key}
-              className="rounded-2xl overflow-hidden"
-              style={{
-                background: "#12121c",
-                border: `1px solid ${hasBusy ? style.accent + "40" : style.accent + "18"}`,
-                boxShadow: hasBusy ? `0 0 24px ${style.accent}12` : "0 2px 8px rgba(0,0,0,0.3)",
-              }}
-              aria-label={`${vr.label} room with ${roomAgents.length} agents`}
-            >
-              {/* Room header — clickable to collapse */}
-              <div
-                className="flex items-center gap-5 px-6 py-4 cursor-pointer transition-colors duration-150 select-none"
-                style={{ background: `${style.accent}08` }}
-                onClick={() => toggle(vr.key)}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(vr.key); } }}
-              >
-                <div
-                  className="w-3 h-3 rounded-full flex-shrink-0"
-                  style={{
-                    background: hasBusy ? "#ffa726" : "#22C55E",
-                    boxShadow: hasBusy ? "0 0 10px #ffa726" : "0 0 6px #22C55E",
-                  }}
-                />
-                <h3
-                  className="text-base font-bold tracking-[4px] uppercase"
-                  style={{ color: style.accent }}
-                >
-                  {vr.label}
-                </h3>
-                <span
-                  className="text-xs font-mono font-bold px-2.5 py-1 rounded-md"
-                  style={{ background: `${style.accent}20`, color: style.accent }}
-                >
-                  {roomAgents.length}
-                </span>
-                {hasBusy && (
-                  <span className="text-xs font-mono font-bold px-2.5 py-1 rounded-md bg-amber-400/15 text-amber-400">
-                    {vr.busyCount} busy
-                  </span>
-                )}
-                <svg
-                  width={16} height={16} viewBox="0 0 16 16" fill="none"
-                  className="ml-auto flex-shrink-0 transition-transform duration-200"
-                  style={{ transform: collapsed.has(vr.key) ? "rotate(-90deg)" : "rotate(0deg)" }}
-                >
+            <section key={vr.key} className="rounded-2xl overflow-hidden"
+              style={{ background: "#12121c", border: `1px solid ${vr.hasBusy ? style.accent + "40" : style.accent + "18"}`, boxShadow: vr.hasBusy ? `0 0 24px ${style.accent}12` : "0 2px 8px rgba(0,0,0,0.3)" }}
+              aria-label={`${vr.label} room with ${vr.agents.length} agents`}>
+              <div className="flex items-center gap-5 px-6 py-4 cursor-pointer transition-colors duration-150 select-none" style={{ background: `${style.accent}08` }}
+                onClick={() => toggleCollapsed(vr.key)} role="button" tabIndex={0}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleCollapsed(vr.key); } }}>
+                <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: vr.hasBusy ? "#ffa726" : "#22C55E", boxShadow: vr.hasBusy ? "0 0 10px #ffa726" : "0 0 6px #22C55E" }} />
+                <h3 className="text-base font-bold tracking-[4px] uppercase" style={{ color: style.accent }}>{vr.label}</h3>
+                <span className="text-xs font-mono font-bold px-2.5 py-1 rounded-md" style={{ background: `${style.accent}20`, color: style.accent }}>{vr.agents.length}</span>
+                {vr.hasBusy && <span className="text-xs font-mono font-bold px-2.5 py-1 rounded-md bg-amber-400/15 text-amber-400">{vr.busyCount} busy</span>}
+                <svg width={16} height={16} viewBox="0 0 16 16" fill="none" className="ml-auto flex-shrink-0 transition-transform duration-200"
+                  style={{ transform: isCollapsed(vr.key) ? "rotate(-90deg)" : "rotate(0deg)" }}>
                   <path d="M4 6l4 4 4-4" stroke={style.accent} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" opacity={0.5} />
                 </svg>
               </div>
-
-              {/* Accent bar */}
-              {!collapsed.has(vr.key) && <div className="h-[1px]" style={{ background: `${style.accent}25` }} />}
-
-              {/* Agent rows */}
-              {!collapsed.has(vr.key) && <div className="flex flex-col">
-                {roomAgents.map((agent, i) => {
-                  const isBusy = agent.status === "busy";
-                  const isSaiyan = saiyanTargets.has(agent.target);
-                  const isLast = i === roomAgents.length - 1;
-                  return (
-                    <div
-                      key={agent.target}
-                      ref={(el) => observe(el, agent.target)}
-                      className="flex items-center gap-5 px-6 py-3.5 transition-all duration-150"
-                      style={{
-                        borderBottom: !isLast ? `1px solid rgba(255,255,255,0.04)` : "none",
-                        background: isBusy ? `${style.accent}06` : "transparent",
-                      }}
-                      onClick={(e) => onAgentClick(agent, style.accent, vr.label, e)}
-                      role="button"
-                      tabIndex={0}
-                      aria-label={`${agent.name} - ${agent.status}`}
-                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); } }}
-                    >
-                      {/* Avatar — hover preview triggers here only */}
-                      <div
-                        className="w-14 h-14 flex-shrink-0 cursor-pointer"
-                        style={{ overflow: "visible" }}
-                        onMouseEnter={(e) => showPreview(agent, style.accent, vr.label, e)}
-                        onMouseLeave={() => hidePreview()}
-                      >
-                        <svg viewBox="-40 -50 80 80" width={56} height={56} overflow="visible">
-                          <AgentAvatar
-                            name={agent.name}
-                            target={agent.target}
-                            status={agent.status}
-                            preview={agent.preview}
-                            accent={style.accent}
-                            saiyan={isSaiyan}
-                            onClick={() => {}}
-                          />
-                        </svg>
-                      </div>
-
-                      {/* Info column */}
-                      <div className="flex flex-col gap-1 flex-1 min-w-0">
-                        <div className="flex items-center gap-3">
-                          {/* Name */}
-                          <span
-                            className="text-[15px] font-semibold truncate"
-                            style={{ color: isBusy ? style.accent : "#E2E8F0" }}
-                          >
-                            {agent.name.replace(/-oracle$/, "").replace(/-/g, " ")}
-                          </span>
-
-                          {/* Status badge */}
-                          <span
-                            className="text-[11px] font-mono px-2.5 py-1 rounded-md flex-shrink-0"
-                            style={{
-                              background: isBusy ? "#ffa72620" : agent.status === "ready" ? "#22C55E18" : "rgba(255,255,255,0.06)",
-                              color: isBusy ? "#ffa726" : agent.status === "ready" ? "#22C55E" : "#94A3B8",
-                            }}
-                          >
-                            {agent.status}
-                          </span>
-
-                          {isSaiyan && (
-                            <span className="text-[10px] font-mono px-2.5 py-1 rounded-md bg-amber-400/20 text-amber-400 flex-shrink-0">
-                              SAIYAN
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Activity preview */}
-                        <span className="text-[13px] truncate" style={{ color: "#64748B" }}>
-                          {agent.preview?.slice(0, 80) || "\u00a0"}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>}
+              {!isCollapsed(vr.key) && <div className="h-[1px]" style={{ background: `${style.accent}25` }} />}
+              {!isCollapsed(vr.key) && (
+                <div className="flex flex-col">
+                  {vr.agents.map((agent, i) => (
+                    <AgentRow key={agent.target} agent={agent} accent={style.accent} roomLabel={vr.label}
+                      saiyan={saiyanTargets.has(agent.target)} isLast={i === vr.agents.length - 1}
+                      observe={observe} showPreview={showPreview} hidePreview={hidePreview} onAgentClick={onAgentClick} />
+                  ))}
+                </div>
+              )}
             </section>
           );
         })}
@@ -411,69 +312,38 @@ export const FleetGrid = memo(function FleetGrid({
 
       {/* Group toggle */}
       <div className="max-w-5xl mx-auto flex justify-center py-4">
-        <button
-          className="text-[11px] font-mono px-4 py-2 rounded-lg border cursor-pointer transition-colors duration-150"
-          style={{
-            background: "rgba(255,255,255,0.03)",
-            borderColor: "rgba(255,255,255,0.08)",
-            color: "#94A3B8",
-          }}
+        <button className="text-[11px] font-mono px-4 py-2 rounded-lg border cursor-pointer transition-colors duration-150"
+          style={{ background: "rgba(255,255,255,0.03)", borderColor: "rgba(255,255,255,0.08)", color: "#94A3B8" }}
           onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
           onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.03)"; }}
-          onClick={() => setGrouped(g => !g)}
-        >
+          onClick={toggleGrouped}>
           {grouped ? "Show all rooms" : "Group solo oracles"}
         </button>
       </div>
 
       <BottomStats agents={agents} eventLog={eventLog} />
 
-      {/* Hover Preview Card — fixed near row on hover (hidden when pinned) */}
+      {/* Hover Preview */}
       {hoverPreview && !pinnedPreview && (
-        <div
-          className="fixed z-30 pointer-events-auto"
-          style={{
-            left: hoverPreview.pos.x,
-            top: hoverPreview.pos.y,
-            maxWidth: PREVIEW_CARD.width,
-            animation: "fadeSlideIn 0.15s ease-out",
-          }}
-          onMouseEnter={keepPreview}
-          onMouseLeave={hidePreview}
-        >
-          <HoverPreviewCard
-            agent={hoverPreview.agent}
-            roomLabel={hoverPreview.label}
-            accent={hoverPreview.accent}
-          />
+        <div className="fixed pointer-events-auto" style={{ zIndex: 30, left: hoverPreview.pos.x, top: hoverPreview.pos.y, maxWidth: PREVIEW_CARD.width, animation: "fadeSlideIn 0.15s ease-out" }}
+          onMouseEnter={keepPreview} onMouseLeave={hidePreview}>
+          <HoverPreviewCard agent={hoverPreview.agent} roomLabel={hoverPreview.label} accent={hoverPreview.accent} />
         </div>
       )}
 
-      {/* Pinned Preview Card — fixed viewport, slides from hover to center */}
+      {/* Backdrop */}
+      {pinnedPreview && (
+        <div className="fixed inset-0" style={{ zIndex: 35, background: "rgba(0,0,0,0.5)", backdropFilter: "blur(2px)", WebkitBackdropFilter: "blur(2px)" }} onClick={onPinnedClose} />
+      )}
+
+      {/* Pinned Preview */}
       {pinnedPreview && pinnedAnimPos && (
-        <div
-          ref={pinnedRef}
-          className="fixed z-40 pointer-events-auto"
-          style={{
-            left: pinnedAnimPos.left,
-            top: pinnedAnimPos.top,
-            maxWidth: PREVIEW_CARD.width,
-            transition: "left 0.3s ease-out, top 0.3s ease-out",
-          }}
-        >
-          <HoverPreviewCard
-            agent={pinnedPreview.agent}
-            roomLabel={pinnedPreview.label}
-            accent={pinnedPreview.accent}
-            pinned
-            send={send}
-            onFullscreen={onPinnedFullscreen}
-            onClose={onPinnedClose}
-            eventLog={eventLog}
-            addEvent={addEvent}
+        <div ref={pinnedRef} className="fixed pointer-events-auto" style={{ zIndex: 40, left: pinnedAnimPos.left, top: pinnedAnimPos.top, maxWidth: PREVIEW_CARD.width }}>
+          <HoverPreviewCard agent={pinnedPreview.agent} roomLabel={pinnedPreview.label} accent={pinnedPreview.accent}
+            pinned send={send} onFullscreen={onPinnedFullscreen} onClose={onPinnedClose}
+            eventLog={eventLog} addEvent={addEvent}
             externalInputBuf={getInputBuf(pinnedPreview.agent.target)}
-            onInputBufChange={(val) => setInputBuf(pinnedPreview.agent.target, val)}
-          />
+            onInputBufChange={(val) => setInputBuf(pinnedPreview.agent.target, val)} />
         </div>
       )}
     </div>
