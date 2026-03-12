@@ -28,15 +28,37 @@ export async function fetchIssuePrompt(issueNum: number, repo?: string): Promise
 }
 
 export async function resolveOracle(oracle: string): Promise<{ repoPath: string; repoName: string; parentDir: string }> {
+  // 1. Try standard pattern: <oracle>-oracle
   const ghqOut = await ssh(`ghq list --full-path | grep -i '/${oracle}-oracle$' | head -1`);
-  if (!ghqOut) {
-    console.error(`oracle repo not found: ${oracle}-oracle`);
-    process.exit(1);
+  if (ghqOut?.trim()) {
+    const repoPath = ghqOut.trim();
+    const repoName = repoPath.split("/").pop()!;
+    const parentDir = repoPath.replace(/\/[^/]+$/, "");
+    return { repoPath, repoName, parentDir };
   }
-  const repoPath = ghqOut.trim();
-  const repoName = repoPath.split("/").pop()!;
-  const parentDir = repoPath.replace(/\/[^/]+$/, "");
-  return { repoPath, repoName, parentDir };
+
+  // 2. Fallback: check fleet configs for repo mapping
+  const { readdirSync, readFileSync } = await import("fs");
+  const { join } = await import("path");
+  const fleetDir = join(import.meta.dir, "../fleet");
+  try {
+    for (const file of readdirSync(fleetDir).filter(f => f.endsWith(".json"))) {
+      const config = JSON.parse(readFileSync(join(fleetDir, file), "utf-8"));
+      const win = (config.windows || []).find((w: any) => w.name === `${oracle}-oracle`);
+      if (win?.repo) {
+        const fullPath = await ssh(`ghq list --full-path | grep -i '/${win.repo.replace(/^[^/]+\//, "")}$' | head -1`);
+        if (fullPath?.trim()) {
+          const repoPath = fullPath.trim();
+          const repoName = repoPath.split("/").pop()!;
+          const parentDir = repoPath.replace(/\/[^/]+$/, "");
+          return { repoPath, repoName, parentDir };
+        }
+      }
+    }
+  } catch { /* fleet dir may not exist */ }
+
+  console.error(`oracle repo not found: ${oracle} (tried ${oracle}-oracle pattern and fleet configs)`);
+  process.exit(1);
 }
 
 export async function findWorktrees(parentDir: string, repoName: string): Promise<{ path: string; name: string }[]> {
