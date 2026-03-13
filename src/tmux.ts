@@ -167,6 +167,36 @@ export class Tmux {
     await this.run("send-keys", "-t", target, "-l", text);
   }
 
+  // --- Buffers ---
+
+  async loadBuffer(text: string): Promise<void> {
+    const escaped = text.replace(/'/g, "'\\''");
+    const cmd = `printf '%s' '${escaped}' | tmux load-buffer -`;
+    await ssh(cmd, this.host);
+  }
+
+  async pasteBuffer(target: string): Promise<void> {
+    await this.run("paste-buffer", "-t", target);
+  }
+
+  /**
+   * Smart text sending — uses load-buffer for multiline/long messages,
+   * send-keys for short single-line. Always appends Enter.
+   * Ported from old bash maw hey (Dec 2025).
+   */
+  async sendText(target: string, text: string): Promise<void> {
+    if (text.includes("\n") || text.length > 500) {
+      // Buffer method — reliable for multiline/long content
+      await this.loadBuffer(text);
+      await this.pasteBuffer(target);
+      await this.sendKeys(target, "Enter");
+    } else {
+      // Direct send-keys for short single-line
+      const escaped = text.replace(/'/g, "'\\''");
+      await this.run("send-keys", "-t", target, "--", `'${escaped}'`, "Enter");
+    }
+  }
+
   // --- Options ---
 
   async setOption(target: string, option: string, value: string): Promise<void> {

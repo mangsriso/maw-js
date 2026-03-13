@@ -69,6 +69,9 @@ export async function selectWindow(target: string, host?: string): Promise<void>
 }
 
 export async function sendKeys(target: string, text: string, host?: string): Promise<void> {
+  const { Tmux } = await import("./tmux");
+  const t = new Tmux(host);
+
   // Special keys → send as tmux key names (no Enter appended)
   const SPECIAL_KEYS: Record<string, string> = {
     "\x1b": "Escape",
@@ -82,7 +85,7 @@ export async function sendKeys(target: string, text: string, host?: string): Pro
     "\x15": "C-u",
   };
   if (SPECIAL_KEYS[text]) {
-    await ssh(`tmux send-keys -t '${target}' ${SPECIAL_KEYS[text]}`, host);
+    await t.sendKeys(target, SPECIAL_KEYS[text]);
     return;
   }
 
@@ -92,24 +95,18 @@ export async function sendKeys(target: string, text: string, host?: string): Pro
 
   // If only the enter was left after stripping, just send Enter
   if (!body) {
-    await ssh(`tmux send-keys -t '${target}' Enter`, host);
+    await t.sendKeys(target, "Enter");
     return;
   }
 
-  if (body.length === 1) {
-    // Single char — send literally
-    const escaped = body === "'" ? "\"'\"" : `'${body}'`;
-    await ssh(`tmux send-keys -t '${target}' -l ${escaped}`, host);
-    if (endsWithEnter) await ssh(`tmux send-keys -t '${target}' Enter`, host);
-  } else if (body.startsWith("/")) {
+  if (body.startsWith("/")) {
     // Slash commands: send char by char for interactive tools (Claude Code, etc.)
     for (const ch of body) {
-      const escaped = ch === "'" ? "\"'\"" : `'${ch}'`;
-      await ssh(`tmux send-keys -t '${target}' -l ${escaped}`, host);
+      await t.sendKeysLiteral(target, ch);
     }
-    await ssh(`tmux send-keys -t '${target}' Enter`, host);
+    await t.sendKeys(target, "Enter");
   } else {
-    const escaped = body.replace(/'/g, "'\\''");
-    await ssh(`tmux send-keys -t '${target}' -- '${escaped}' Enter`, host);
+    // Smart send — uses buffer for multiline/long, send-keys for short
+    await t.sendText(target, body);
   }
 }
