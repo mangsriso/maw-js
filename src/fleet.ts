@@ -1,5 +1,5 @@
 import { join } from "path";
-import { readdirSync } from "fs";
+import { readdirSync, renameSync, existsSync } from "fs";
 import { ssh } from "./ssh";
 import { loadConfig, buildCommand, getEnvVars } from "./config";
 
@@ -25,6 +25,210 @@ function loadFleet(): FleetSession[] {
     const raw = require(join(FLEET_DIR, f));
     return raw as FleetSession;
   });
+}
+
+interface FleetEntry {
+  file: string;
+  num: number;
+  groupName: string;
+  session: FleetSession;
+}
+
+function loadFleetEntries(): FleetEntry[] {
+  const files = readdirSync(FLEET_DIR)
+    .filter(f => f.endsWith(".json") && !f.endsWith(".disabled"))
+    .sort();
+
+  return files.map(f => {
+    const raw = require(join(FLEET_DIR, f));
+    const match = f.match(/^(\d+)-(.+)\.json$/);
+    return {
+      file: f,
+      num: match ? parseInt(match[1], 10) : 0,
+      groupName: match ? match[2] : f.replace(".json", ""),
+      session: raw as FleetSession,
+    };
+  });
+}
+
+export async function cmdFleetLs() {
+  const entries = loadFleetEntries();
+  const disabled = readdirSync(FLEET_DIR).filter(f => f.endsWith(".disabled")).length;
+
+  // Detect running tmux sessions
+  let runningSessions: string[] = [];
+  try {
+    const out = await ssh("tmux list-sessions -F '#{session_name}' 2>/dev/null");
+    runningSessions = out.trim().split("\n").filter(Boolean);
+  } catch { /* tmux not running */ }
+
+  // Detect conflicts (duplicate numbers)
+  const numCount = new Map<number, string[]>();
+  for (const e of entries) {
+    const list = numCount.get(e.num) || [];
+    list.push(e.groupName);
+    numCount.set(e.num, list);
+  }
+
+  const conflicts = [...numCount.entries()].filter(([, names]) => names.length > 1);
+
+  console.log(`\n  \x1b[36mFleet Configs\x1b[0m (${entries.length} active, ${disabled} disabled)\n`);
+  console.log(`  ${"#".padEnd(4)} ${"Session".padEnd(20)} ${"Win".padEnd(5)} Status`);
+  console.log(`  ${"─".repeat(4)} ${"─".repeat(20)} ${"─".repeat(5)} ${"─".repeat(20)}`);
+
+  for (const e of entries) {
+    const numStr = String(e.num).padStart(2, "0");
+    const name = e.session.name.padEnd(20);
+    const wins = String(e.session.windows.length).padEnd(5);
+    const isRunning = runningSessions.includes(e.session.name);
+    const isConflict = (numCount.get(e.num)?.length ?? 0) > 1;
+
+    let status = isRunning ? "\x1b[32mrunning\x1b[0m" : "\x1b[90mstopped\x1b[0m";
+    if (isConflict) status += "  \x1b[31mCONFLICT\x1b[0m";
+
+    console.log(`  ${numStr}  ${name} ${wins} ${status}`);
+  }
+
+  if (conflicts.length > 0) {
+    console.log(`\n  \x1b[31m⚠ ${conflicts.length} conflict(s) found.\x1b[0m Run \x1b[36mmaw fleet renumber\x1b[0m to fix.`);
+  }
+  console.log();
+}
+
+export async function cmdFleetRenumber() {
+  const entries = loadFleetEntries();
+
+  // Check for conflicts first
+  const numCount = new Map<number, number>();
+  for (const e of entries) numCount.set(e.num, (numCount.get(e.num) || 0) + 1);
+  const hasConflicts = [...numCount.values()].some(c => c > 1);
+
+  if (!hasConflicts) {
+    console.log("\n  \x1b[32mNo conflicts found.\x1b[0m Fleet numbering is clean.\n");
+    return;
+  }
+
+  // Detect running tmux sessions
+  let runningSessions: string[] = [];
+  try {
+    const out = await ssh("tmux list-sessions -F '#{session_name}' 2>/dev/null");
+    runningSessions = out.trim().split("\n").filter(Boolean);
+  } catch { /* tmux not running */ }
+
+  console.log("\n  \x1b[36mRenumbering fleet...\x1b[0m\n");
+
+  // Sort by current number, then by name for stability
+  const sorted = [...entries].sort((a, b) => a.num - b.num || a.groupName.localeCompare(b.groupName));
+
+  // Skip 99-overview from renumbering
+  const regular = sorted.filter(e => e.num !== 99);
+  const overview = sorted.filter(e => e.num === 99);
+
+  let num = 1;
+  for (const e of regular) {
+    const newNum = String(num).padStart(2, "0");
+    const newFile = `${newNum}-${e.groupName}.json`;
+    const newName = `${newNum}-${e.groupName}`;
+    const oldName = e.session.name;
+
+    if (newFile !== e.file) {
+      // Update config.name in JSON
+      e.session.name = newName;
+      await Bun.write(join(FLEET_DIR, newFile), JSON.stringify(e.session, null, 2) + "\n");
+
+      // Remove old file (only if name changed)
+      const oldPath = join(FLEET_DIR, e.file);
+      if (existsSync(oldPath) && newFile !== e.file) {
+        const { unlinkSync } = require("fs");
+        unlinkSync(oldPath);
+      }
+
+      // Rename running tmux session if it matches old name
+      if (runningSessions.includes(oldName)) {
+        try {
+          await ssh(`tmux rename-session -t '${oldName}' '${newName}'`);
+          console.log(`  ${e.file.padEnd(28)} → ${newFile}  (tmux renamed)`);
+        } catch {
+          console.log(`  ${e.file.padEnd(28)} → ${newFile}  (tmux rename failed)`);
+        }
+      } else {
+        console.log(`  ${e.file.padEnd(28)} → ${newFile}`);
+      }
+    } else {
+      console.log(`  ${e.file.padEnd(28)}   (unchanged)`);
+    }
+    num++;
+  }
+
+  console.log(`\n  \x1b[32mDone.\x1b[0m ${regular.length} configs renumbered.\n`);
+}
+
+export async function cmdFleetValidate() {
+  const entries = loadFleetEntries();
+  const issues: string[] = [];
+
+  // 1. Duplicate numbers
+  const numMap = new Map<number, string[]>();
+  for (const e of entries) {
+    const list = numMap.get(e.num) || [];
+    list.push(e.groupName);
+    numMap.set(e.num, list);
+  }
+  for (const [num, names] of numMap) {
+    if (names.length > 1) {
+      issues.push(`\x1b[31mDuplicate #${String(num).padStart(2, "0")}\x1b[0m: ${names.join(", ")}`);
+    }
+  }
+
+  // 2. Oracle in multiple active configs
+  const oracleMap = new Map<string, string[]>();
+  for (const e of entries) {
+    for (const w of e.session.windows) {
+      const oracles = oracleMap.get(w.name) || [];
+      oracles.push(e.session.name);
+      oracleMap.set(w.name, oracles);
+    }
+  }
+  for (const [oracle, sessions] of oracleMap) {
+    if (sessions.length > 1) {
+      issues.push(`\x1b[33mDuplicate oracle\x1b[0m: ${oracle} in ${sessions.join(", ")}`);
+    }
+  }
+
+  // 3. Config references repo that doesn't exist
+  const ghqRoot = loadConfig().ghqRoot;
+  for (const e of entries) {
+    for (const w of e.session.windows) {
+      const repoPath = join(ghqRoot, w.repo);
+      if (!existsSync(repoPath)) {
+        issues.push(`\x1b[33mMissing repo\x1b[0m: ${w.repo} (in ${e.file})`);
+      }
+    }
+  }
+
+  // 4. Running sessions without config
+  try {
+    const out = await ssh("tmux list-sessions -F '#{session_name}' 2>/dev/null");
+    const runningSessions = out.trim().split("\n").filter(Boolean);
+    const configNames = new Set(entries.map(e => e.session.name));
+    for (const s of runningSessions) {
+      if (!configNames.has(s)) {
+        issues.push(`\x1b[90mOrphan session\x1b[0m: tmux '${s}' has no fleet config`);
+      }
+    }
+  } catch { /* tmux not running */ }
+
+  // Report
+  console.log(`\n  \x1b[36mFleet Validation\x1b[0m (${entries.length} configs)\n`);
+
+  if (issues.length === 0) {
+    console.log("  \x1b[32m✓ All clear.\x1b[0m No issues found.\n");
+  } else {
+    for (const issue of issues) {
+      console.log(`  ⚠ ${issue}`);
+    }
+    console.log(`\n  \x1b[31m${issues.length} issue(s) found.\x1b[0m\n`);
+  }
 }
 
 export async function cmdSleep() {

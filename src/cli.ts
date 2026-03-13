@@ -7,7 +7,7 @@ import { cmdWake, fetchIssuePrompt } from "./wake";
 import { cmdPulseAdd, cmdPulseLs } from "./pulse";
 import { cmdSpawn } from "./spawn";
 import { cmdOracleList } from "./oracle";
-import { cmdWakeAll, cmdSleep } from "./fleet";
+import { cmdWakeAll, cmdSleep, cmdFleetLs, cmdFleetRenumber, cmdFleetValidate } from "./fleet";
 import { cmdFleetInit } from "./fleet-init";
 
 const args = process.argv.slice(2);
@@ -68,6 +68,9 @@ function usage() {
   maw wake <oracle> [task]    Wake oracle in tmux window + claude
   maw wake <oracle> --issue N Wake oracle with GitHub issue as prompt
   maw fleet init              Scan ghq repos, generate fleet/*.json
+  maw fleet ls                List fleet configs with conflict detection
+  maw fleet renumber          Fix numbering conflicts (sequential)
+  maw fleet validate          Check for problems (dupes, orphans, missing repos)
   maw wake all [--kill]       Wake entire fleet from fleet/*.json
   maw stop                    Stop all fleet sessions
   maw spawn <oracle> [opts]   Create tmux session from worktrees
@@ -122,6 +125,14 @@ if (!cmd || cmd === "--help" || cmd === "-h") {
   await cmdSend(args[1], args.slice(2).join(" "));
 } else if (cmd === "fleet" && args[1] === "init") {
   await cmdFleetInit();
+} else if (cmd === "fleet" && args[1] === "ls") {
+  await cmdFleetLs();
+} else if (cmd === "fleet" && args[1] === "renumber") {
+  await cmdFleetRenumber();
+} else if (cmd === "fleet" && args[1] === "validate") {
+  await cmdFleetValidate();
+} else if (cmd === "fleet" && !args[1]) {
+  await cmdFleetLs();
 } else if (cmd === "stop" || cmd === "sleep" || cmd === "rest") {
   await cmdSleep();
 } else if (cmd === "wake") {
@@ -167,7 +178,7 @@ if (!cmd || cmd === "--help" || cmd === "-h") {
   }
 } else if (cmd === "overview" || cmd === "warroom" || cmd === "ov") {
   await cmdOverview(args.slice(1));
-} else if (cmd === "oracle" || cmd === "oracles" || cmd === "fleet") {
+} else if (cmd === "oracle" || cmd === "oracles") {
   const subcmd = args[1]?.toLowerCase();
   if (!subcmd || subcmd === "ls" || subcmd === "list") {
     await cmdOracleList();
