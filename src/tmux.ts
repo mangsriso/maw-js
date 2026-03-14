@@ -208,9 +208,8 @@ export class Tmux {
       await new Promise(r => setTimeout(r, 150));
       await this.sendKeys(target, "Enter");
     } else {
-      // Direct send-keys for short single-line
-      const escaped = text.replace(/'/g, "'\\''");
-      await this.run("send-keys", "-t", target, "--", `'${escaped}'`, "Enter");
+      // Direct send-keys — let q() in run() handle all escaping
+      await this.run("send-keys", "-t", target, "--", text, "Enter");
     }
   }
 
