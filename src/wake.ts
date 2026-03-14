@@ -129,12 +129,13 @@ export async function cmdWake(oracle: string, opts: { task?: string; newWt?: str
   let session = await detectSession(oracle);
   if (!session) {
     session = getSessionMap()[oracle] || resolveFleetSession(oracle) || oracle;
-    // Create session with main window
-    await ssh(`tmux new-session -d -s '${session}' -n '${oracle}' -c '${repoPath}'`);
+    // Create session with main window (use oracle-oracle name to match fleet configs)
+    const mainWindowName = `${oracle}-oracle`;
+    await ssh(`tmux new-session -d -s '${session}' -n '${mainWindowName}' -c '${repoPath}'`);
     await setSessionEnv(session);
     await new Promise(r => setTimeout(r, 300));
-    await ssh(`tmux send-keys -t '${session}:${oracle}' '${buildCommand(oracle + "-oracle")}' Enter`);
-    console.log(`\x1b[32m+\x1b[0m created session '${session}' (main: ${oracle})`);
+    await ssh(`tmux send-keys -t '${session}:${mainWindowName}' '${buildCommand(mainWindowName)}' Enter`);
+    console.log(`\x1b[32m+\x1b[0m created session '${session}' (main: ${mainWindowName})`);
 
     // Spawn all existing worktree windows
     const allWt = await findWorktrees(parentDir, repoName);
@@ -151,7 +152,7 @@ export async function cmdWake(oracle: string, opts: { task?: string; newWt?: str
   }
 
   let targetPath = repoPath;
-  let windowName = oracle;
+  let windowName = `${oracle}-oracle`;
   let freshWorktree = false;
 
   if (opts.newWt || opts.task) {
@@ -183,22 +184,26 @@ export async function cmdWake(oracle: string, opts: { task?: string; newWt?: str
     }
   }
 
-  // Check if window already exists
+  // Check if window already exists (match exact name or fleet pattern oracle-N-name)
   try {
     const winList = await ssh(`tmux list-windows -t '${session}' -F '#{window_name}' 2>/dev/null`);
-    if (winList.split("\n").some(w => w === windowName)) {
+    const windows = winList.split("\n").filter(Boolean);
+    // Match exact name OR fleet config pattern (e.g. "pulse-scheduler" matches "pulse-1-scheduler")
+    const existingWindow = windows.find(w => w === windowName)
+      || windows.find(w => new RegExp(`^${oracle}-\\d+-${windowName.replace(`${oracle}-`, "")}$`).test(w));
+    if (existingWindow) {
       if (opts.prompt) {
         // Window exists but we have a prompt → send claude -p
-        console.log(`\x1b[33m⚡\x1b[0m '${windowName}' exists, sending prompt`);
-        await ssh(`tmux select-window -t '${session}:${windowName}'`);
+        console.log(`\x1b[33m⚡\x1b[0m '${existingWindow}' exists, sending prompt`);
+        await ssh(`tmux select-window -t '${session}:${existingWindow}'`);
         const escaped = opts.prompt.replace(/'/g, "'\\''");
-        const cmd = buildCommand(windowName);
-        await ssh(`tmux send-keys -t '${session}:${windowName}' "${cmd.replace(/"/g, '\\"')} -p '${escaped}'" Enter`);
-        return `${session}:${windowName}`;
+        const cmd = buildCommand(existingWindow);
+        await ssh(`tmux send-keys -t '${session}:${existingWindow}' "${cmd.replace(/"/g, '\\"')} -p '${escaped}'" Enter`);
+        return `${session}:${existingWindow}`;
       }
-      console.log(`\x1b[33m⚡\x1b[0m '${windowName}' already running in ${session}`);
-      await ssh(`tmux select-window -t '${session}:${windowName}'`);
-      return `${session}:${windowName}`;
+      console.log(`\x1b[33m⚡\x1b[0m '${existingWindow}' already running in ${session}`);
+      await ssh(`tmux select-window -t '${session}:${existingWindow}'`);
+      return `${session}:${existingWindow}`;
     }
   } catch { /* session might be fresh */ }
 
