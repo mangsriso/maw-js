@@ -14,8 +14,6 @@ import { cmdDone } from "./commands/done";
 import { cmdSleepOne } from "./commands/sleep";
 import { cmdLogLs, cmdLogExport, cmdLogChat } from "./commands/log";
 import { cmdTokens } from "./commands/tokens";
-import { cmdTab } from "./commands/tab";
-import { cmdTalkTo } from "./commands/talk-to";
 
 const args = process.argv.slice(2);
 const cmd = args[0]?.toLowerCase();
@@ -54,10 +52,6 @@ function usage() {
   maw tokens --json           JSON output for API consumption
   maw log chat [oracle]       Chat view — grouped conversation bubbles
   maw chat [oracle]           Shorthand for log chat
-  maw tab                      List tabs in current session
-  maw tab N                    Peek tab N
-  maw tab N <msg...>           Send message to tab N
-  maw talk-to <agent> <msg>    Thread + hey (persistent + real-time)
   maw <agent> <msg...>        Shorthand for hey
   maw <agent>                 Shorthand for peek
   maw serve [port]            Start web UI (default: 3456)
@@ -103,11 +97,6 @@ if (cmd === "--version" || cmd === "-v") {
   const msgArgs = args.slice(2).filter(a => a !== "--force");
   if (!args[1] || !msgArgs.length) { console.error("usage: maw hey <agent> <message> [--force]"); process.exit(1); }
   await cmdSend(args[1], msgArgs.join(" "), force);
-} else if (cmd === "talk-to" || cmd === "talkto" || cmd === "talk") {
-  const force = args.includes("--force");
-  const msgArgs = args.slice(2).filter(a => a !== "--force");
-  if (!args[1] || !msgArgs.length) { console.error("usage: maw talk-to <agent> <message> [--force]"); process.exit(1); }
-  await cmdTalkTo(args[1], msgArgs.join(" "), force);
 } else if (cmd === "fleet" && args[1] === "init") {
   await cmdFleetInit();
 } else if (cmd === "fleet" && args[1] === "ls") {
@@ -251,8 +240,6 @@ if (cmd === "--version" || cmd === "-v") {
   }
 } else if (cmd === "completions") {
   await cmdCompletions(args[1]);
-} else if (cmd === "tab" || cmd === "tabs") {
-  await cmdTab(args.slice(1));
 } else if (cmd === "view" || cmd === "create-view" || cmd === "attach") {
   if (!args[1]) { console.error("usage: maw view <agent> [window] [--clean]"); process.exit(1); }
   const clean = args.includes("--clean");

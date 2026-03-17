@@ -3,7 +3,7 @@ import { join } from "path";
 
 export async function cmdCompletions(sub: string) {
   if (sub === "commands") {
-    console.log("ls peek hey wake fleet stop done overview about oracle pulse view create-view tab talk-to serve");
+    console.log("ls peek hey wake fleet stop done overview about oracle pulse view create-view serve");
   } else if (sub === "oracles" || sub === "windows") {
     const fleetDir = join(import.meta.dir, "../../fleet");
     const names = new Set<string>();
