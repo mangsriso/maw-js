@@ -377,6 +377,20 @@ app.post("/api/worktrees/cleanup", async (c) => {
   }
 });
 
+// --- Auto-Cleanup Sweeper ---
+import { sweep, getSweeperStats } from "./sweeper";
+
+app.get("/api/sweeper", (c) => c.json(getSweeperStats()));
+
+app.post("/api/sweeper/run", async (c) => {
+  try {
+    const result = await sweep(feedTailer);
+    return c.json(result);
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500);
+  }
+});
+
 // --- Token Usage ---
 import { loadIndex, buildIndex, summarize, realtimeRate } from "./token-index";
 
@@ -549,4 +563,8 @@ if (!process.env.MAW_CLI) {
     statusHeartbeat();
     setInterval(statusHeartbeat, 15 * 60 * 1000);
   }, 60_000);
+
+  // Start auto-cleanup sweeper (feedTailer already started by MawEngine)
+  const { startSweeper } = await import("./sweeper");
+  startSweeper(feedTailer);
 }

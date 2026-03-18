@@ -232,8 +232,34 @@ if (cmd === "--version" || cmd === "-v") {
     }
     if (args.includes("--dry-run")) console.log(`\n\x1b[90m(dry run — use without --dry-run to clean)\x1b[0m`);
     console.log();
+  } else if (subcmd === "sweep") {
+    // Manual trigger of auto-cleanup sweeper
+    const { FeedTailer } = await import("./feed-tail");
+    const { sweep } = await import("./sweeper");
+    const tailer = new FeedTailer();
+    tailer.start();
+    await new Promise(r => setTimeout(r, 500)); // let feed buffer fill
+    const result = await sweep(tailer);
+    tailer.stop();
+    console.log(`\n\x1b[36mSweeper Results\x1b[0m\n`);
+    console.log(`  Scanned: ${result.scanned} | Static: ${result.skippedStatic} | Idle: ${result.cleanedIdle} | MaxAge: ${result.cleanedMaxAge}`);
+    if (result.details.length > 0) {
+      console.log();
+      for (const d of result.details) {
+        console.log(`  \x1b[33m${d.reason}\x1b[0m  ${d.name}`);
+        for (const line of d.log) console.log(`    \x1b[32m✓\x1b[0m ${line}`);
+      }
+    }
+    if (result.errors.length > 0) {
+      console.log();
+      for (const e of result.errors) console.log(`  \x1b[31m✗\x1b[0m ${e}`);
+    }
+    if (result.cleanedIdle + result.cleanedMaxAge === 0) {
+      console.log(`\n  \x1b[32m✓\x1b[0m Nothing to clean.`);
+    }
+    console.log();
   } else {
-    console.error("usage: maw pulse <add|ls|cleanup> [opts]");
+    console.error("usage: maw pulse <add|ls|cleanup|sweep> [opts]");
     process.exit(1);
   }
 } else if (cmd === "overview" || cmd === "warroom" || cmd === "ov") {

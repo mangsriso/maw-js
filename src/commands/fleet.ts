@@ -8,6 +8,8 @@ import { ensureSessionRunning } from "./wake";
 interface FleetWindow {
   name: string;
   repo: string;
+  lifecycle?: "static" | "ephemeral";
+  ttl?: string;
 }
 
 interface FleetSession {
