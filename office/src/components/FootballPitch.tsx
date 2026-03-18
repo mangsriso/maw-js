@@ -4,35 +4,17 @@ import { roomStyle } from "../lib/constants";
 import type { AgentState } from "../lib/types";
 import type { RecentEntry } from "../lib/store";
 
-/** 4-4-2 formation: DEF(5) → MID(5) → FWD(5) — all 15 on pitch, balanced columns
- *  GK embedded in DEF column. True 4-4-2 shape with even distribution. */
-const FORMATION: Record<string, { col: number; row: number }> = {
-  // DEF (col 0) — GK + back four
-  "overview":      { col: 0, row: 0 },
-  "odin":          { col: 0, row: 1 },
-  "mother":        { col: 0, row: 2 },
-  "calliope":      { col: 0, row: 3 },
-  "nexus":         { col: 0, row: 4 },
-  // MID (col 1) — midfield four + DMF
-  "homekeeper":    { col: 1, row: 0 },
-  "volt":          { col: 1, row: 1 },
-  "fireman":       { col: 1, row: 2 },
-  "xiaoer":        { col: 1, row: 3 },
-  "dustboy":       { col: 1, row: 4 },
-  // FWD (col 2) — strikers + wingers
-  "pulse":         { col: 2, row: 0 },
-  "neo":           { col: 2, row: 1 },
-  "hermes":        { col: 2, row: 2 },
-  "arthur":        { col: 2, row: 3 },
-  "floodboy":      { col: 2, row: 4 },
-};
+/** Dynamic formation: only active agents appear on pitch.
+ *  Busy agents get FWD (col 2), ready → MID (col 1), recently-gone → DEF (col 0). */
 
 const COL_LABELS = ["DEF", "MID", "FWD"];
 const COL_COUNT = 3;
 
-/** Extract oracle name from agent name (strip -oracle, -N-suffix, etc) */
+/** Extract oracle name from agent name.
+ *  Only strip -oracle suffix and numbered worker suffixes (-N-taskname).
+ *  Keep names like "wednesday-tg" intact (not collapse to "wednesday"). */
 function oracleName(name: string): string {
-  return name.replace(/-oracle$/, "").replace(/-\d+-.*$/, "").replace(/-.*$/, "");
+  return name.replace(/-oracle$/, "").replace(/-\d+-.*$/, "");
 }
 
 interface FootballPitchProps {
@@ -69,32 +51,41 @@ export const FootballPitch = memo(function FootballPitch({
   const handleMouseLeave = useCallback(() => {
     setMousePos(null);
   }, []);
-  // Deduplicate: one agent per oracle (prefer main -oracle window)
+  // Dynamic: only show agents that are busy or recently active
   const oracleAgents = useMemo(() => {
     const byOracle = new Map<string, AgentState>();
     for (const a of agents) {
+      if (a.status === "idle") continue; // idle agents stay off pitch
       const oracle = oracleName(a.name);
-      const pos = FORMATION[oracle];
-      if (!pos) continue;
       const existing = byOracle.get(oracle);
-      // Prefer busy > ready > idle, then prefer -oracle suffix
       if (!existing ||
           (a.status === "busy" && existing.status !== "busy") ||
           a.name.endsWith("-oracle")) {
         byOracle.set(oracle, a);
       }
     }
+    // Also add recently-gone agents from recentMap (not idle, recently seen)
+    const now = Date.now();
+    for (const [target, entry] of Object.entries(recentMap)) {
+      const oracle = oracleName(entry.name);
+      if (byOracle.has(oracle)) continue;
+      // Show if was active in last 5 minutes
+      if (now - entry.lastBusy < 5 * 60_000) {
+        const agent = agents.find(a => a.target === target);
+        if (agent) byOracle.set(oracle, agent);
+      }
+    }
     return byOracle;
-  }, [agents]);
+  }, [agents, recentMap]);
 
-  // Group by column
+  // Auto-assign columns: busy → FWD, ready → MID, idle/recent → DEF
   const columns = useMemo(() => {
     const cols: { oracle: string; agent: AgentState; row: number }[][] = Array.from({ length: COL_COUNT }, () => []);
+    const rowCounters = [0, 0, 0];
     for (const [oracle, agent] of oracleAgents) {
-      const pos = FORMATION[oracle];
-      if (pos) cols[pos.col].push({ oracle, agent, row: pos.row });
+      const col = agent.status === "busy" ? 2 : agent.status === "ready" ? 1 : 0;
+      cols[col].push({ oracle, agent, row: rowCounters[col]++ });
     }
-    for (const col of cols) col.sort((a, b) => a.row - b.row);
     return cols;
   }, [oracleAgents]);
 
@@ -183,14 +174,14 @@ export const FootballPitch = memo(function FootballPitch({
           {columns.map((col, colIdx) => (
             <div
               key={colIdx}
-              className="flex flex-col items-center justify-center gap-1"
+              className="flex flex-col items-center justify-evenly"
               style={{ flex: 1 }}
             >
               {col.map(({ oracle, agent }) => {
                 const rs = roomStyle(agent.session);
                 const isBusy = agent.status === "busy";
                 const isIdle = agent.status === "idle";
-                const displayName = oracle.length > 8 ? oracle.slice(0, 7) + ".." : oracle;
+                const displayName = oracle.length > 14 ? oracle.slice(0, 12) + ".." : oracle;
 
                 // Top 5 most recent get bigger (but still grey unless busy)
                 const recentEntry = recentMap[agent.target];
