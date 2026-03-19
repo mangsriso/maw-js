@@ -71,6 +71,55 @@ export MAW_HOST=white.local   # SSH target (default: local tmux)
 | `#chat` | AI conversation log viewer |
 | `#config` | JSON config editor + PIN settings |
 
+## Auto-Cleanup (Sweeper)
+
+Automatically cleans up idle ephemeral worktrees. Static agents (fleet `lifecycle: "static"`) are never touched.
+
+### Config (`maw.config.json`)
+
+```json
+{
+  "autoCleanup": {
+    "enabled": true,
+    "idleTimeout": "2h",
+    "maxAge": "24h",
+    "sweepInterval": "5m",
+    "notify": false
+  }
+}
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `enabled` | `false` | Enable periodic sweeping |
+| `idleTimeout` | `"2h"` | No feed activity for this long → cleanup |
+| `maxAge` | `"24h"` | Absolute max lifetime regardless of activity |
+| `sweepInterval` | `"5m"` | How often the sweeper runs |
+| `notify` | `false` | Send Telegram notification on cleanup |
+
+### Fleet Lifecycle
+
+In `fleet/*.json`, set `lifecycle` per window:
+
+```json
+{
+  "name": "01-wednesday",
+  "windows": [
+    { "name": "wednesday-oracle", "repo": "mangsriso/wednesday-oracle", "lifecycle": "static" }
+  ]
+}
+```
+
+- `"static"` — protected, sweeper never touches
+- `"ephemeral"` (default) — subject to idle/maxAge cleanup
+- Per-window TTL override: `"ttl": "4h"`
+
+### Manual Sweep
+
+```bash
+maw pulse sweep    # trigger sweep immediately
+```
+
 ## Evolution
 
 ```
