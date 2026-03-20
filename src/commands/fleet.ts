@@ -1,5 +1,5 @@
 import { join } from "path";
-import { readdirSync, renameSync, existsSync } from "fs";
+import { readdirSync, renameSync, existsSync, unlinkSync } from "fs";
 import { ssh } from "../ssh";
 import { tmux } from "../tmux";
 import { loadConfig, buildCommand, getEnvVars } from "../config";
@@ -139,17 +139,18 @@ export async function cmdFleetRenumber() {
       // Remove old file (only if name changed)
       const oldPath = join(FLEET_DIR, e.file);
       if (existsSync(oldPath) && newFile !== e.file) {
-        const { unlinkSync } = require("fs");
         unlinkSync(oldPath);
       }
 
-      // Rename running tmux session if it matches old name
-      if (runningSessions.includes(oldName)) {
+      // Rename running tmux session (#84) — try exact name first, then pattern match
+      const runningMatch = runningSessions.find(s => s === oldName)
+        || runningSessions.find(s => s.replace(/^\d+-/, "") === e.groupName);
+      if (runningMatch && runningMatch !== newName) {
         try {
-          await tmux.run("rename-session", "-t", oldName, newName);
-          console.log(`  ${e.file.padEnd(28)} → ${newFile}  (tmux renamed)`);
+          await tmux.run("rename-session", "-t", runningMatch, newName);
+          console.log(`  ${e.file.padEnd(28)} → ${newFile}  (tmux: ${runningMatch} → ${newName})`);
         } catch {
-          console.log(`  ${e.file.padEnd(28)} → ${newFile}  (tmux rename failed)`);
+          console.log(`  ${e.file.padEnd(28)} → ${newFile}  (tmux rename failed: ${runningMatch})`);
         }
       } else {
         console.log(`  ${e.file.padEnd(28)} → ${newFile}`);
