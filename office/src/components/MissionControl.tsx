@@ -76,7 +76,7 @@ export const MissionControl = memo(function MissionControl({
   const [zoom, setZoom] = useState(() => {
     if (typeof window === "undefined") return 0.9;
     const isPortrait = window.innerHeight > window.innerWidth;
-    return isPortrait ? 0.65 : 0.9;
+    return isPortrait ? 1.05 : 0.9;
   });
   const [pan, setPan] = useState({ x: 0, y: 120 });
   const [isPanning, setIsPanning] = useState(false);
