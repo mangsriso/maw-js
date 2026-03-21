@@ -21,7 +21,7 @@ export function BroadcastModal({ agents, send, onClose }: { agents: AgentState[]
   const [sent, setSent] = useState(false);
   const recRef = useRef<any>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const activeAgents = agents.filter(a => a.status === "busy" || a.status === "ready");
+  const activeAgents = agents.filter(a => a.name !== "live" && a.name !== "zsh");
 
   useEffect(() => {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
