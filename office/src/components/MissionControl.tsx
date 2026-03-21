@@ -72,7 +72,12 @@ export const MissionControl = memo(function MissionControl({
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
-  const [zoom, setZoom] = useState(0.9);
+  // Auto-fit zoom: portrait = higher zoom (narrower), landscape = 0.9
+  const [zoom, setZoom] = useState(() => {
+    if (typeof window === "undefined") return 0.9;
+    const isPortrait = window.innerHeight > window.innerWidth;
+    return isPortrait ? 0.65 : 0.9;
+  });
   const [pan, setPan] = useState({ x: 0, y: 120 });
   const [isPanning, setIsPanning] = useState(false);
   const panStart = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
