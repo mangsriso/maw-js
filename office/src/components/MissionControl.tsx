@@ -601,20 +601,10 @@ export const MissionControl = memo(function MissionControl({
           <span className="text-[10px] font-mono">Oracle</span>
           <kbd className="text-[8px] text-white/20 ml-1">⌘K</kbd>
         </button>
-        <button
-          onClick={() => setShowBroadcast(true)}
-          className="w-12 h-12 rounded-2xl flex items-center justify-center text-2xl bg-amber-500/10 backdrop-blur border border-amber-500/20 text-amber-400 hover:bg-amber-500/20 hover:scale-105 active:scale-95 cursor-pointer transition-all shadow-[0_0_20px_rgba(251,191,36,0.15)]"
-          title="Broadcast to all agents"
-        >
-          📢
-        </button>
       </div>
 
       {/* Oracle Search overlay */}
       {showSearch && <OracleSearch onClose={() => setShowSearch(false)} />}
-
-      {/* Broadcast modal */}
-      {showBroadcast && <BroadcastModal agents={agents} send={send} onClose={() => setShowBroadcast(false)} />}
 
       {/* Bottom stats + FPS */}
       <BottomStats agents={agents} />
