@@ -42,24 +42,27 @@ export const MissionControl = memo(function MissionControl({
     if (pinnedPreview) setShowSearch(false);
   }, [pinnedPreview]);
 
-  // Auto-pin preview when a NEW agent becomes busy — shows latest, user closes manually
+  // Multi-card: track all busy agents, user can dismiss individually
+  const [multiCards, setMultiCards] = useState<Set<string>>(new Set());
   const seenBusy = useRef<Set<string>>(new Set());
   useEffect(() => {
     const busyAgents = agents.filter(a => a.status === "busy");
-    // Find a newly busy agent we haven't shown yet
-    const newBusy = busyAgents.find(a => !seenBusy.current.has(a.target));
-    if (newBusy) {
-      seenBusy.current.add(newBusy.target);
-      const room = roomStyle(newBusy.session);
-      const pos = { x: window.innerWidth / 2 + 50, y: 80 };
-      pinnedByUser.current = true;
-      setPinnedPreview({ agent: newBusy, room: { label: room.label, accent: room.accent }, pos, svgX: 600, svgY: 500 });
+    let changed = false;
+    for (const a of busyAgents) {
+      if (!seenBusy.current.has(a.target)) {
+        seenBusy.current.add(a.target);
+        setMultiCards(prev => new Set([...prev, a.target]));
+        changed = true;
+      }
     }
-    // Clean up seen set when agents go idle (so they can trigger again next time)
+    // Clean up seen set when agents go idle
     for (const target of seenBusy.current) {
       if (!busyAgents.find(a => a.target === target)) seenBusy.current.delete(target);
     }
   }, [agents]);
+  const dismissCard = useCallback((target: string) => {
+    setMultiCards(prev => { const next = new Set(prev); next.delete(target); return next; });
+  }, []);
 
   // Cmd+K or Ctrl+K to toggle search
   useEffect(() => {
@@ -576,7 +579,7 @@ export const MissionControl = memo(function MissionControl({
         </div>
       )}
 
-      {/* Pinned Preview Card — slides from hover position to center */}
+      {/* Pinned Preview Card — single agent (from click) */}
       {pinnedPreview && pinnedAnimPos && (
         <div
           ref={pinnedRef}
@@ -601,6 +604,34 @@ export const MissionControl = memo(function MissionControl({
             externalInputBuf={getInputBuf(pinnedPreview.agent.target)}
             onInputBufChange={(val) => setInputBuf(pinnedPreview.agent.target, val)}
           />
+        </div>
+      )}
+
+      {/* Multi-card bar — all busy agents side by side */}
+      {multiCards.size > 0 && !pinnedPreview && (
+        <div className="absolute bottom-16 left-4 right-20 z-35 flex gap-2 overflow-x-auto pointer-events-auto" style={{ scrollbarWidth: "none" }}>
+          {[...multiCards].map(target => {
+            const agent = agents.find(a => a.target === target);
+            if (!agent) return null;
+            const room = roomStyle(agent.session);
+            const cardWidth = multiCards.size === 1 ? 700 : multiCards.size === 2 ? 500 : 360;
+            return (
+              <div key={target} style={{ width: cardWidth, minWidth: 300, flexShrink: 0 }}>
+                <HoverPreviewCard
+                  agent={agent}
+                  roomLabel={room.label}
+                  accent={room.accent}
+                  pinned
+                  send={send}
+                  onClose={() => dismissCard(target)}
+                  eventLog={eventLog}
+                  addEvent={addEvent}
+                  externalInputBuf={getInputBuf(target)}
+                  onInputBufChange={(val) => setInputBuf(target, val)}
+                />
+              </div>
+            );
+          })}
         </div>
       )}
 
