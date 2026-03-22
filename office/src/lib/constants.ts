@@ -91,7 +91,7 @@ export const AVATAR = {
 
 // Preview card dimensions
 export const PREVIEW_CARD = {
-  width: 700,
+  width: 520,
   maxHeight: 860,
 } as const;
 

@@ -57,6 +57,7 @@ interface StatusBarProps {
   connected: boolean;
   agentCount: number;
   sessionCount: number;
+  tabCount?: number;
   activeView?: string;
   askCount?: number;
   onInbox?: () => void;
@@ -101,7 +102,7 @@ function useTokenRate() {
   return { lastHourRate };
 }
 
-export const StatusBar = memo(function StatusBar({ connected, agentCount, sessionCount, activeView = "office", askCount = 0, onInbox, onJump, muted, onToggleMute, children }: StatusBarProps) {
+export const StatusBar = memo(function StatusBar({ connected, agentCount, sessionCount, tabCount = 0, activeView = "office", askCount = 0, onInbox, onJump, muted, onToggleMute, children }: StatusBarProps) {
   const { lastHourRate } = useTokenRate();
   return (
     <header className="sticky top-0 z-20 flex flex-wrap items-center gap-x-3 gap-y-2 mx-4 sm:mx-6 mt-3 px-4 sm:px-6 py-2.5 rounded-2xl bg-black/50 backdrop-blur-xl border border-white/[0.06] shadow-[0_4px_30px_rgba(0,0,0,0.4)]">
@@ -120,6 +121,11 @@ export const StatusBar = memo(function StatusBar({ connected, agentCount, sessio
       <span className="text-sm text-white/70 whitespace-nowrap">
         <strong className="text-purple-400">{sessionCount}</strong> rooms
       </span>
+      {tabCount > 0 && (
+        <span className="text-sm text-white/70 whitespace-nowrap">
+          <strong className="text-green-400">{tabCount}</strong> tabs
+        </span>
+      )}
       <span className="text-[10px] text-white/20 font-mono whitespace-nowrap">
         v{__MAW_VERSION__} · {__MAW_BUILD__}
       </span>

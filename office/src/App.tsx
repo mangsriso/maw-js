@@ -144,11 +144,12 @@ function useAudioUnlock() {
 }
 
 /** Shared layout — StatusBar + overlays rendered once for all views */
-function Layout({ activeView, connected, agentCount, sessionCount, askCount, muted, onToggleMute, onJump, onInbox, statusBarChildren, terminalModal, showShortcuts, onCloseShortcuts, jumpOverlay, inboxOverlay, broadcastModal, fullHeight, children }: {
+function Layout({ activeView, connected, agentCount, sessionCount, tabCount, askCount, muted, onToggleMute, onJump, onInbox, statusBarChildren, terminalModal, showShortcuts, onCloseShortcuts, jumpOverlay, inboxOverlay, broadcastModal, fullHeight, children }: {
   activeView: string;
   connected: boolean;
   agentCount: number;
   sessionCount: number;
+  tabCount?: number;
   askCount: number;
   muted: boolean;
   onToggleMute: () => void;
@@ -171,7 +172,7 @@ function Layout({ activeView, connected, agentCount, sessionCount, askCount, mut
   return (
     <div className={wrapperClass} style={{ background: "#020208" }}>
       <div className={`relative z-10${fullHeight ? " flex-shrink-0" : ""}`}>
-        <StatusBar connected={connected} agentCount={agentCount} sessionCount={sessionCount} activeView={activeView} onJump={onJump} askCount={askCount} onInbox={onInbox} muted={muted} onToggleMute={onToggleMute}>
+        <StatusBar connected={connected} agentCount={agentCount} sessionCount={sessionCount} tabCount={tabCount} activeView={activeView} onJump={onJump} askCount={askCount} onInbox={onInbox} muted={muted} onToggleMute={onToggleMute}>
           {statusBarChildren}
         </StatusBar>
       </div>
@@ -304,6 +305,7 @@ export function App() {
     connected,
     agentCount: agents.length,
     sessionCount: sessions.length,
+    tabCount: sessions.reduce((sum, s) => sum + s.windows.length, 0),
     askCount,
     muted,
     onToggleMute: toggleMuted,

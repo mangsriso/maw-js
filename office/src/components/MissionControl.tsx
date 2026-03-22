@@ -44,10 +44,21 @@ export const MissionControl = memo(function MissionControl({
 
   // Multi-card: track all busy agents, user can dismiss individually
   const [multiMode, setMultiMode] = useState(() => localStorage.getItem("office-multiview") !== "0");
-  const [multiCards, setMultiCards] = useState<Set<string>>(new Set());
+  const [multiCards, setMultiCards] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem("office-multicards");
+      return saved ? new Set(JSON.parse(saved)) : new Set();
+    } catch { return new Set(); }
+  });
   const seenBusy = useRef<Set<string>>(new Set());
 
+  // Persist multiCards to localStorage
+  useEffect(() => {
+    localStorage.setItem("office-multicards", JSON.stringify([...multiCards]));
+  }, [multiCards]);
+
   // Listen for toggle from FloatingButtons
+  const prevMultiMode = useRef(multiMode);
   useEffect(() => {
     const handler = (e: Event) => setMultiMode((e as CustomEvent).detail);
     window.addEventListener("multiview-change", handler);
@@ -55,6 +66,20 @@ export const MissionControl = memo(function MissionControl({
   }, []);
   useEffect(() => {
     const busyAgents = agents.filter(a => a.status === "busy");
+
+    // When switching back to multi mode, re-add all busy agents
+    if (multiMode && !prevMultiMode.current) {
+      setPinnedPreview(null);
+      const newCards = new Set(busyAgents.map(a => a.target));
+      setMultiCards(prev => new Set([...prev, ...newCards]));
+      for (const a of busyAgents) seenBusy.current.add(a.target);
+    }
+    // When switching to single mode, clear multi cards
+    if (!multiMode && prevMultiMode.current) {
+      setMultiCards(new Set());
+    }
+    prevMultiMode.current = multiMode;
+
     for (const a of busyAgents) {
       if (!seenBusy.current.has(a.target)) {
         seenBusy.current.add(a.target);
@@ -624,18 +649,19 @@ export const MissionControl = memo(function MissionControl({
 
       {/* Multi-card bar — all busy agents side by side */}
       {multiCards.size > 0 && !pinnedPreview && (
-        <div className="absolute bottom-16 left-4 right-20 z-35 flex gap-2 overflow-x-auto pointer-events-auto" style={{ scrollbarWidth: "none" }}>
+        <div className="fixed bottom-0 left-0 right-0 z-50 flex justify-center gap-2 overflow-x-auto pointer-events-auto p-3" style={{ height: "calc(100vh - 80px)", scrollbarWidth: "none", background: "transparent" }}>
           {[...multiCards].map(target => {
             const agent = agents.find(a => a.target === target);
             if (!agent) return null;
             const room = roomStyle(agent.session);
             return (
-              <div key={target} style={{ flex: 1, minWidth: 280 }}>
+              <div key={target} style={{ flex: 1, minWidth: 280, maxWidth: 700, height: "100%" }}>
                 <HoverPreviewCard
                   agent={agent}
                   roomLabel={room.label}
                   accent={room.accent}
                   pinned
+                  compact
                   send={send}
                   onClose={() => dismissCard(target)}
                   eventLog={eventLog}
