@@ -79,9 +79,9 @@ export function useSessions() {
       setCaptureData(prev => {
         const existing = prev[target];
         if (existing?.status === "busy") return prev;
-        // Play saiyan sound on transition to busy (60s cooldown)
+        // Play notification sound on transition to busy (10s cooldown)
         const now = Date.now();
-        if (now - lastSoundTime.current > 60_000) {
+        if (now - lastSoundTime.current > 10_000) {
           lastSoundTime.current = now;
           playSaiyanSound();
         }

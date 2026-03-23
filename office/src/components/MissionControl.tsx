@@ -6,6 +6,7 @@ import { OracleSearch } from "./OracleSearch";
 import { BottomStats } from "./BottomStats";
 import { FpsCounter } from "./FpsCounter";
 import { roomStyle, PREVIEW_CARD } from "../lib/constants";
+import { BroadcastModal } from "./FleetGrid";
 import type { AgentState, Session, AgentEvent } from "../lib/types";
 interface MissionControlProps {
   sessions: Session[];
@@ -34,11 +35,74 @@ export const MissionControl = memo(function MissionControl({
   const hoverTimeout = useRef<ReturnType<typeof setTimeout>>();
 
   const [showSearch, setShowSearch] = useState(false);
+  const [showBroadcast, setShowBroadcast] = useState(false);
 
   // Hide search when card is pinned
   useEffect(() => {
     if (pinnedPreview) setShowSearch(false);
   }, [pinnedPreview]);
+
+  // Multi-card: track all busy agents, user can dismiss individually
+  const [multiMode, setMultiMode] = useState(() => localStorage.getItem("office-multiview") !== "0");
+  const [multiCards, setMultiCards] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem("office-multicards");
+      return saved ? new Set(JSON.parse(saved)) : new Set();
+    } catch { return new Set(); }
+  });
+  const seenBusy = useRef<Set<string>>(new Set());
+
+  // Persist multiCards to localStorage
+  useEffect(() => {
+    localStorage.setItem("office-multicards", JSON.stringify([...multiCards]));
+  }, [multiCards]);
+
+  // Listen for toggle from FloatingButtons
+  const prevMultiMode = useRef(multiMode);
+  useEffect(() => {
+    const handler = (e: Event) => setMultiMode((e as CustomEvent).detail);
+    window.addEventListener("multiview-change", handler);
+    return () => window.removeEventListener("multiview-change", handler);
+  }, []);
+  useEffect(() => {
+    const busyAgents = agents.filter(a => a.status === "busy");
+
+    // When switching back to multi mode, re-add all busy agents
+    if (multiMode && !prevMultiMode.current) {
+      setPinnedPreview(null);
+      const newCards = new Set(busyAgents.map(a => a.target));
+      setMultiCards(prev => new Set([...prev, ...newCards]));
+      for (const a of busyAgents) seenBusy.current.add(a.target);
+    }
+    // When switching to single mode, clear multi cards
+    if (!multiMode && prevMultiMode.current) {
+      setMultiCards(new Set());
+    }
+    prevMultiMode.current = multiMode;
+
+    for (const a of busyAgents) {
+      if (!seenBusy.current.has(a.target)) {
+        seenBusy.current.add(a.target);
+        if (multiMode) {
+          // Multi: add to card set
+          setMultiCards(prev => new Set([...prev, a.target]));
+        } else {
+          // Single: replace pinned preview with newest
+          const room = roomStyle(a.session);
+          const pos = { x: window.innerWidth / 2 + 50, y: 80 };
+          pinnedByUser.current = true;
+          setPinnedPreview({ agent: a, room: { label: room.label, accent: room.accent }, pos, svgX: 600, svgY: 500 });
+        }
+      }
+    }
+    // Clean up seen set when agents go idle
+    for (const target of seenBusy.current) {
+      if (!busyAgents.find(a => a.target === target)) seenBusy.current.delete(target);
+    }
+  }, [agents, multiMode]);
+  const dismissCard = useCallback((target: string) => {
+    setMultiCards(prev => { const next = new Set(prev); next.delete(target); return next; });
+  }, []);
 
   // Cmd+K or Ctrl+K to toggle search
   useEffect(() => {
@@ -52,8 +116,13 @@ export const MissionControl = memo(function MissionControl({
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
-  const [zoom, setZoom] = useState(1.1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
+  // Auto-fit zoom: portrait = higher zoom (narrower), landscape = 0.9
+  const [zoom, setZoom] = useState(() => {
+    if (typeof window === "undefined") return 0.9;
+    const isPortrait = window.innerHeight > window.innerWidth;
+    return isPortrait ? 1.05 : 0.9;
+  });
+  const [pan, setPan] = useState({ x: 0, y: 120 });
   const [isPanning, setIsPanning] = useState(false);
   const panStart = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
@@ -274,10 +343,12 @@ export const MissionControl = memo(function MissionControl({
   }, [layout]);
 
   // Compute viewBox based on zoom and pan
+  const isPortrait = typeof window !== "undefined" && window.innerHeight > window.innerWidth;
+  const baseH = isPortrait ? 650 : 1000;
   const vbW = 1200 / zoom;
-  const vbH = 1000 / zoom;
+  const vbH = baseH / zoom;
   const vbX = (1200 - vbW) / 2 - pan.x;
-  const vbY = (1000 - vbH) / 2 - pan.y;
+  const vbY = (baseH - vbH) / 2 - pan.y + (isPortrait ? 250 : 0);
 
   return (
     <div
@@ -327,11 +398,54 @@ export const MissionControl = memo(function MissionControl({
         <circle cx={600} cy={500} r={450} fill="none" stroke="#ffa726" strokeWidth={0.5} opacity={0.04}
           strokeDasharray="8 16" />
 
-        {/* Center hub */}
-        <circle cx={600} cy={500} r={45} fill="none" stroke="#26c6da" strokeWidth={1} opacity={0.15} />
-        <circle cx={600} cy={500} r={7} fill="#26c6da" opacity={0.4} />
-        <text x={600} y={468} textAnchor="middle" fill="#26c6da" fontSize={12} opacity={0.5}
-          fontFamily="'SF Mono', monospace" letterSpacing={5}>MISSION CONTROL</text>
+        {/* Center hub — busy (bright) + ready (grey) agents ON STAGE */}
+        {(() => {
+          const stageAgents = agents.filter(a => a.status === "busy" || a.status === "ready");
+          const busyCount = stageAgents.filter(a => a.status === "busy").length;
+          const hubR = Math.max(45, 30 + stageAgents.length * 25);
+          const hasStage = stageAgents.length > 0;
+          return (
+            <>
+              <circle cx={600} cy={500} r={hubR} fill="none" stroke={hasStage ? "#ffa726" : "#26c6da"} strokeWidth={hasStage ? 1.5 : 1} opacity={hasStage ? 0.3 : 0.15} />
+              {!hasStage ? (
+                <>
+                  <circle cx={600} cy={500} r={7} fill="#26c6da" opacity={0.4} />
+                  <text x={600} y={468} textAnchor="middle" fill="#26c6da" fontSize={12} opacity={0.5}
+                    fontFamily="'SF Mono', monospace" letterSpacing={5}>MISSION CONTROL</text>
+                </>
+              ) : (
+                <>
+                  <text x={600} y={500 - hubR + 16} textAnchor="middle" fill="#ffa726" fontSize={10} opacity={0.7}
+                    fontFamily="'SF Mono', monospace" letterSpacing={3}>ON STAGE</text>
+                  <text x={600 + 38} y={500 - hubR + 17} textAnchor="start" fill="#ffa726" fontSize={9} opacity={0.5}
+                    fontFamily="'SF Mono', monospace">{busyCount > 0 ? busyCount : ""}</text>
+                  {stageAgents.map((a, i) => {
+                    const cols = Math.min(stageAgents.length, 4);
+                    const rows = Math.ceil(stageAgents.length / cols);
+                    const col = i % cols;
+                    const row = Math.floor(i / cols);
+                    const spacing = 65;
+                    const ax = 600 + (col - (cols - 1) / 2) * spacing;
+                    const ay = 500 + (row - (rows - 1) / 2) * spacing;
+                    const isBusy = a.status === "busy";
+                    return (
+                      <g key={a.target} transform={`translate(${ax},${ay})`} className="cursor-pointer"
+                        style={{ opacity: isBusy ? 1 : 0.35, filter: isBusy ? "none" : "grayscale(1)", transition: "opacity 1s, filter 1s" }}
+                        onClick={() => {
+                          const room = roomStyle(a.session);
+                          const pos = { x: window.innerWidth / 2 + 50, y: 80 };
+                          pinnedByUser.current = true;
+                          setPinnedPreview({ agent: a, room: { label: room.label, accent: room.accent }, pos, svgX: ax, svgY: ay });
+                        }}>
+                        <AgentAvatar name={a.name} target={a.target} status={a.status} preview="" accent={isBusy ? "#ffa726" : "#666"} onClick={() => {}} />
+                      </g>
+                    );
+                  })}
+                </>
+              )}
+            </>
+          );
+        })()}
 
         {/* Connection lines from hub to sessions */}
         {layout.map((s) => (
@@ -505,7 +619,7 @@ export const MissionControl = memo(function MissionControl({
         </div>
       )}
 
-      {/* Pinned Preview Card — slides from hover position to center */}
+      {/* Pinned Preview Card — single agent (from click) */}
       {pinnedPreview && pinnedAnimPos && (
         <div
           ref={pinnedRef}
@@ -533,19 +647,49 @@ export const MissionControl = memo(function MissionControl({
         </div>
       )}
 
-      {/* Search button — bottom left */}
-      <button
-        onClick={() => setShowSearch(true)}
-        className="absolute bottom-4 left-6 flex items-center gap-2 px-3 py-2 rounded-xl bg-black/50 backdrop-blur border border-white/10 text-white/50 hover:text-[#64b5f6] hover:border-[#64b5f6]/30 cursor-pointer transition-all z-20"
-        title="Search Oracle (⌘K)"
-      >
-        <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
-          <circle cx={11} cy={11} r={8} />
-          <line x1={21} y1={21} x2={16.65} y2={16.65} />
-        </svg>
-        <span className="text-[10px] font-mono">Oracle</span>
-        <kbd className="text-[8px] text-white/20 ml-1">⌘K</kbd>
-      </button>
+      {/* Multi-card bar — all busy agents side by side */}
+      {multiCards.size > 0 && !pinnedPreview && (
+        <div className="fixed bottom-0 left-0 right-0 z-50 flex justify-center gap-2 overflow-x-auto pointer-events-auto p-3" style={{ height: "calc(100vh - 80px)", scrollbarWidth: "none", background: "transparent" }}>
+          {[...multiCards].map(target => {
+            const agent = agents.find(a => a.target === target);
+            if (!agent) return null;
+            const room = roomStyle(agent.session);
+            return (
+              <div key={target} style={{ flex: 1, minWidth: 280, maxWidth: 700, height: "100%" }}>
+                <HoverPreviewCard
+                  agent={agent}
+                  roomLabel={room.label}
+                  accent={room.accent}
+                  pinned
+                  compact
+                  send={send}
+                  onClose={() => dismissCard(target)}
+                  eventLog={eventLog}
+                  addEvent={addEvent}
+                  externalInputBuf={getInputBuf(target)}
+                  onInputBufChange={(val) => setInputBuf(target, val)}
+                />
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Bottom left buttons — search + broadcast */}
+      <div className="absolute bottom-4 left-6 flex items-center gap-2 z-20">
+        <button
+          onClick={() => setShowSearch(true)}
+          className="flex items-center gap-2 px-3 py-2 rounded-xl bg-black/50 backdrop-blur border border-white/10 text-white/50 hover:text-[#64b5f6] hover:border-[#64b5f6]/30 cursor-pointer transition-all"
+          title="Search Oracle (⌘K)"
+        >
+          <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
+            <circle cx={11} cy={11} r={8} />
+            <line x1={21} y1={21} x2={16.65} y2={16.65} />
+          </svg>
+          <span className="text-[10px] font-mono">Oracle</span>
+          <kbd className="text-[8px] text-white/20 ml-1">⌘K</kbd>
+        </button>
+      </div>
 
       {/* Oracle Search overlay */}
       {showSearch && <OracleSearch onClose={() => setShowSearch(false)} />}

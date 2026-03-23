@@ -6,14 +6,16 @@
  *   2. Max age: worktree exists longer than N hours → cleanup (regardless of activity)
  *
  * Static workers (lifecycle: "static" in fleet config) are never touched.
+ *
+ * Adapted: FeedTailer → FeedEvent[] (in-memory buffer from server.ts)
  */
 
-import { readdirSync, readFileSync, appendFileSync } from "fs";
+import { readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { loadConfig, parseDuration, type AutoCleanupConfig } from "./config";
 import { scanWorktrees, cleanupWorktree, type WorktreeInfo } from "./worktrees";
-import type { FeedTailer } from "./feed-tail";
-import { MAW_LOG_PATH } from "./maw-log";
+import type { FeedEvent } from "./lib/feed";
+import { FLEET_DIR } from "./paths";
 
 interface SweeperState {
   timer: ReturnType<typeof setInterval> | null;
@@ -29,12 +31,11 @@ const state: SweeperState = {
 
 /** Load all static window names from fleet configs */
 function loadStaticWindows(): Set<string> {
-  const fleetDir = join(import.meta.dir, "../fleet");
   const staticNames = new Set<string>();
 
   try {
-    for (const file of readdirSync(fleetDir).filter(f => f.endsWith(".json") && !f.endsWith(".disabled"))) {
-      const config = JSON.parse(readFileSync(join(fleetDir, file), "utf-8"));
+    for (const file of readdirSync(FLEET_DIR).filter(f => f.endsWith(".json") && !f.endsWith(".disabled"))) {
+      const config = JSON.parse(readFileSync(join(FLEET_DIR, file), "utf-8"));
       for (const w of config.windows || []) {
         if (w.lifecycle === "static") {
           staticNames.add(w.name);
@@ -46,11 +47,10 @@ function loadStaticWindows(): Set<string> {
   return staticNames;
 }
 
-/** Get last activity timestamp for each oracle from feed */
-function getLastActivity(feedTailer: FeedTailer): Map<string, number> {
+/** Get last activity timestamp for each oracle from feed buffer */
+function getLastActivity(feedBuffer: FeedEvent[]): Map<string, number> {
   const lastSeen = new Map<string, number>();
-  // Check wider window (48h) to catch long-idle workers
-  const events = feedTailer.getRecent(500);
+  const events = feedBuffer.slice(-500);
 
   for (const e of events) {
     const prev = lastSeen.get(e.oracle) || 0;
@@ -62,20 +62,13 @@ function getLastActivity(feedTailer: FeedTailer): Map<string, number> {
 
 /** Check if a worktree window name matches any static name pattern */
 function isStaticWorker(wt: WorktreeInfo, staticNames: Set<string>): boolean {
-  // Direct match
   if (wt.tmuxWindow && staticNames.has(wt.tmuxWindow)) return true;
-
-  // The main oracle window (e.g., "wednesday-oracle") is always static
-  // even if not explicitly marked — it's the base session
   if (wt.tmuxWindow && wt.tmuxWindow.endsWith("-oracle")) return true;
-
   return false;
 }
 
 /** Match worktree to oracle name in feed */
 function worktreeToOracle(wt: WorktreeInfo): string | null {
-  // tmux window name IS the oracle name in feed.log
-  // e.g., "wednesday-1-learn-skillnet" → feed oracle "wednesday-oracle" or "wednesday-1-learn-skillnet"
   return wt.tmuxWindow || null;
 }
 
@@ -83,12 +76,11 @@ function worktreeToOracle(wt: WorktreeInfo): string | null {
 async function getWorktreeAge(wtPath: string): Promise<number> {
   try {
     const { ssh } = await import("./ssh");
-    // Use the .git file creation time as proxy for worktree age
     const stat = await ssh(`stat -c '%Y' '${wtPath}/.git' 2>/dev/null`);
     const epoch = parseInt(stat.trim());
     if (!isNaN(epoch)) return epoch * 1000;
   } catch {}
-  return Date.now(); // fallback: treat as just created
+  return Date.now();
 }
 
 export interface SweepResult {
@@ -101,7 +93,7 @@ export interface SweepResult {
 }
 
 /** Run a single sweep cycle */
-export async function sweep(feedTailer: FeedTailer): Promise<SweepResult> {
+export async function sweep(feedBuffer: FeedEvent[]): Promise<SweepResult> {
   const config = loadConfig();
   const cleanup = config.autoCleanup;
 
@@ -110,7 +102,7 @@ export async function sweep(feedTailer: FeedTailer): Promise<SweepResult> {
   const now = Date.now();
 
   const staticNames = loadStaticWindows();
-  const lastActivity = getLastActivity(feedTailer);
+  const lastActivity = getLastActivity(feedBuffer);
 
   const result: SweepResult = {
     scanned: 0,
@@ -132,13 +124,11 @@ export async function sweep(feedTailer: FeedTailer): Promise<SweepResult> {
   result.scanned = worktrees.length;
 
   for (const wt of worktrees) {
-    // Skip static workers
     if (isStaticWorker(wt, staticNames)) {
       result.skippedStatic++;
       continue;
     }
 
-    // Already stale/orphan → clean unconditionally
     if (wt.status === "stale" || wt.status === "orphan") {
       try {
         const log = await cleanupWorktree(wt.path);
@@ -150,12 +140,10 @@ export async function sweep(feedTailer: FeedTailer): Promise<SweepResult> {
       continue;
     }
 
-    // Active worker — check idle timeout and max age
     const oracleName = worktreeToOracle(wt);
     const lastSeen = oracleName ? (lastActivity.get(oracleName) || 0) : 0;
     const idleTime = lastSeen > 0 ? now - lastSeen : Infinity;
 
-    // Check max age
     const createdAt = await getWorktreeAge(wt.path);
     const age = now - createdAt;
 
@@ -189,23 +177,15 @@ export async function sweep(feedTailer: FeedTailer): Promise<SweepResult> {
   state.lastSweep = now;
   state.cleanedTotal += result.cleanedIdle + result.cleanedMaxAge;
 
-  // Log sweep result to maw.log
   if (result.cleanedIdle + result.cleanedMaxAge > 0) {
-    const entry = JSON.stringify({
-      ts: new Date().toISOString(),
-      from: "sweeper",
-      to: "all",
-      msg: `swept ${result.scanned} worktrees: ${result.cleanedIdle} idle + ${result.cleanedMaxAge} max-age cleaned, ${result.skippedStatic} static protected`,
-      ch: "sweeper",
-    }) + "\n";
-    try { appendFileSync(MAW_LOG_PATH, entry); } catch {}
+    console.log(`  sweeper: swept ${result.scanned} worktrees: ${result.cleanedIdle} idle + ${result.cleanedMaxAge} max-age cleaned, ${result.skippedStatic} static protected`);
   }
 
   return result;
 }
 
 /** Start the periodic sweeper. Returns stop function. */
-export function startSweeper(feedTailer: FeedTailer): () => void {
+export function startSweeper(feedBuffer: FeedEvent[]): () => void {
   const config = loadConfig();
   const cleanup = config.autoCleanup;
 
@@ -217,20 +197,18 @@ export function startSweeper(feedTailer: FeedTailer): () => void {
   const intervalMs = parseDuration(cleanup.sweepInterval);
   console.log(`  sweeper: enabled (idle=${cleanup.idleTimeout}, maxAge=${cleanup.maxAge}, interval=${cleanup.sweepInterval})`);
 
-  // First sweep after 2 minutes (let server stabilize)
   const initialTimeout = setTimeout(async () => {
     try {
-      const result = await sweep(feedTailer);
+      const result = await sweep(feedBuffer);
       if (result.cleanedIdle + result.cleanedMaxAge > 0) {
         console.log(`  sweeper: cleaned ${result.cleanedIdle + result.cleanedMaxAge} worktrees`);
       }
     } catch {}
   }, 2 * 60_000);
 
-  // Then sweep at configured interval
   const interval = setInterval(async () => {
     try {
-      const result = await sweep(feedTailer);
+      const result = await sweep(feedBuffer);
       if (result.cleanedIdle + result.cleanedMaxAge > 0) {
         console.log(`  sweeper: cleaned ${result.cleanedIdle + result.cleanedMaxAge} worktrees`);
       }

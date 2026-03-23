@@ -1,4 +1,4 @@
-import { tmux } from "./tmux";
+import { tmux, tmuxCmd } from "./tmux";
 import { loadConfig } from "./config";
 import type { ServerWebSocket } from "bun";
 
@@ -81,6 +81,8 @@ async function attach(ws: ServerWebSocket<any>, target: string, cols: number, ro
     await tmux.newGroupedSession(sessionName, ptySessionName, {
       cols: c, rows: r, window: windowPart || undefined,
     });
+    // Hide status bar in PTY sessions so it doesn't appear in terminal output
+    await tmux.setOption(ptySessionName, "status", "off").catch(() => {});
   } catch {
     ws.send(JSON.stringify({ type: "error", message: "Failed to create PTY session" }));
     return;
@@ -89,11 +91,11 @@ async function attach(ws: ServerWebSocket<any>, target: string, cols: number, ro
   // Spawn PTY via script(1) — attach to our grouped session (not the original)
   let args: string[];
   if (isLocalHost()) {
-    const cmd = `stty rows ${r} cols ${c} 2>/dev/null; TERM=xterm-256color tmux attach-session -t '${ptySessionName}'`;
+    const cmd = `stty rows ${r} cols ${c} 2>/dev/null; TERM=xterm-256color ${tmuxCmd()} attach-session -t '${ptySessionName}'`;
     args = ["script", "-qfc", cmd, "/dev/null"];
   } else {
     const host = process.env.MAW_HOST || loadConfig().host || "white.local";
-    args = ["ssh", "-tt", host, `TERM=xterm-256color tmux attach-session -t '${ptySessionName}'`];
+    args = ["ssh", "-tt", host, `TERM=xterm-256color ${tmuxCmd()} attach-session -t '${ptySessionName}'`];
   }
 
   const proc = Bun.spawn(args, {
@@ -107,6 +109,13 @@ async function attach(ws: ServerWebSocket<any>, target: string, cols: number, ro
   sessions.set(safe, session);
 
   ws.send(JSON.stringify({ type: "attached", target: safe }));
+
+  // Force tmux to redraw — send space+backspace through stdin to trigger output
+  setTimeout(() => {
+    try {
+      proc.stdin?.write(new Uint8Array([12])); // Ctrl+L = redraw screen
+    } catch {}
+  }, 500);
 
   // No resize here — grouped session has its own size from stty
 

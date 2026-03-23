@@ -1,10 +1,13 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { serveStatic } from "hono/bun";
+import { dirname, resolve } from "path";
+
+const MAW_ROOT = resolve(dirname(new URL(import.meta.url).pathname), "..");
 import { listSessions, capture, sendKeys, selectWindow } from "./ssh";
 import { processMirror } from "./commands/overview";
-import { FeedTailer } from "./feed-tail";
 import { MawEngine } from "./engine";
+import type { FeedEvent } from "./lib/feed";
 import type { WSData } from "./types";
 
 const app = new Hono();
@@ -50,46 +53,46 @@ app.post("/api/select", async (c) => {
 });
 
 // Serve React app from root (single entry point for all views)
-app.get("/", serveStatic({ root: "./dist-office", path: "/index.html" }));
+app.get("/", serveStatic({ root: `${MAW_ROOT}/dist-office`, path: "/index.html" }));
 
 // Legacy redirects — old paths → hash routes in the React app
 app.get("/dashboard", (c) => c.redirect("/#orbital"));
 app.get("/office", (c) => c.redirect("/#office"));
 
 // Serve React app assets
-app.get("/assets/*", serveStatic({ root: "./dist-office" }));
+app.get("/assets/*", serveStatic({ root: `${MAW_ROOT}/dist-office` }));
 
 // Keep /office/* for backward compat (deep-links, bookmarks)
 app.get("/office/*", serveStatic({
-  root: "./",
+  root: MAW_ROOT,
   rewriteRequestPath: (p) => p.replace(/^\/office/, "/dist-office"),
 }));
 
 // Serve 8-bit office (Bevy WASM)
-app.get("/office-8bit", serveStatic({ root: "./dist-8bit-office", path: "/index.html" }));
+app.get("/office-8bit", serveStatic({ root: `${MAW_ROOT}/dist-8bit-office`, path: "/index.html" }));
 app.get("/office-8bit/*", serveStatic({
-  root: "./",
+  root: MAW_ROOT,
   rewriteRequestPath: (p) => p.replace(/^\/office-8bit/, "/dist-8bit-office"),
 }));
 
 // Serve War Room (Bevy WASM)
-app.get("/war-room", serveStatic({ root: "./dist-war-room", path: "/index.html" }));
+app.get("/war-room", serveStatic({ root: `${MAW_ROOT}/dist-war-room`, path: "/index.html" }));
 app.get("/war-room/*", serveStatic({
-  root: "./",
+  root: MAW_ROOT,
   rewriteRequestPath: (p) => p.replace(/^\/war-room/, "/dist-war-room"),
 }));
 
 // Serve Race Track (Bevy WASM)
-app.get("/race-track", serveStatic({ root: "./dist-race-track", path: "/index.html" }));
+app.get("/race-track", serveStatic({ root: `${MAW_ROOT}/dist-race-track`, path: "/index.html" }));
 app.get("/race-track/*", serveStatic({
-  root: "./",
+  root: MAW_ROOT,
   rewriteRequestPath: (p) => p.replace(/^\/race-track/, "/dist-race-track"),
 }));
 
 // Serve Superman Universe (Bevy WASM)
-app.get("/superman", serveStatic({ root: "./dist-superman", path: "/index.html" }));
+app.get("/superman", serveStatic({ root: `${MAW_ROOT}/dist-superman`, path: "/index.html" }));
 app.get("/superman/*", serveStatic({
-  root: "./",
+  root: MAW_ROOT,
   rewriteRequestPath: (p) => p.replace(/^\/superman/, "/dist-superman"),
 }));
 
@@ -179,7 +182,7 @@ app.post("/api/asks", async (c) => {
 
 // --- Fleet Config ---
 
-const fleetDir = join(import.meta.dir, "../fleet");
+import { FLEET_DIR as fleetDir } from "./paths";
 
 app.get("/api/fleet-config", (c) => {
   try {
@@ -377,6 +380,11 @@ app.post("/api/worktrees/cleanup", async (c) => {
   }
 });
 
+// Token + maw-log APIs removed — use POST /api/feed for all events
+app.get("/api/tokens", (c) => c.json({ error: "removed — use /api/feed" }, 410));
+app.get("/api/tokens/rate", (c) => c.json({ totalTokens: 0, totalPerMin: 0, inputPerMin: 0, outputPerMin: 0, inputTokens: 0, outputTokens: 0, turns: 0 }));
+app.get("/api/maw-log", (c) => c.json({ entries: [], total: 0 }));
+
 // --- Auto-Cleanup Sweeper ---
 import { sweep, getSweeperStats } from "./sweeper";
 
@@ -384,62 +392,49 @@ app.get("/api/sweeper", (c) => c.json(getSweeperStats()));
 
 app.post("/api/sweeper/run", async (c) => {
   try {
-    const result = await sweep(feedTailer);
+    const result = await sweep(feedBuffer);
     return c.json(result);
   } catch (e: any) {
     return c.json({ error: e.message }, 500);
   }
 });
 
-// --- Token Usage ---
-import { loadIndex, buildIndex, summarize, realtimeRate } from "./token-index";
+// --- Oracle Feed (in-memory, HTTP push) ---
+const feedBuffer: FeedEvent[] = [];
+const FEED_MAX = 500;
+const feedListeners = new Set<(event: FeedEvent) => void>();
 
-app.get("/api/tokens", (c) => {
-  const rebuild = c.req.query("rebuild") === "1";
-  const index = rebuild ? buildIndex() : loadIndex();
-  if (index.sessions.length === 0) return c.json({ error: "No index. GET /api/tokens?rebuild=1" }, 404);
-  return c.json({ ...summarize(index), updatedAt: index.updatedAt });
-});
-
-app.get("/api/tokens/rate", (c) => {
-  const mode = c.req.query("mode") || "hour"; // "hour" = current clock hour, "window" = sliding window
-  if (mode === "window") {
-    const window = Math.min(7200, Math.max(60, +(c.req.query("window") || "300")));
-    return c.json(realtimeRate(window));
-  }
-  // Current clock hour: from XX:00:00 to now
-  const now = new Date();
-  const hourStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), 0, 0);
-  const elapsed = Math.max(1, Math.round((now.getTime() - hourStart.getTime()) / 1000));
-  const result = realtimeRate(elapsed);
-  return c.json({ ...result, hour: now.getHours(), elapsed });
-});
-
-// --- Maw Log (Oracle chat history) ---
-import { readLog } from "./maw-log";
-
-app.get("/api/maw-log", (c) => {
-  const from = c.req.query("from");
-  const to = c.req.query("to");
-  const limit = Math.min(500, +(c.req.query("limit") || "200"));
-  let entries = readLog();
-  if (from) entries = entries.filter(e => e.from === from || e.to === from);
-  if (to) entries = entries.filter(e => e.to === to || e.from === to);
-  const total = entries.length;
-  entries = entries.slice(-limit);
-  return c.json({ entries, total });
-});
-
-// --- Oracle Feed ---
-const feedTailer = new FeedTailer();
+function pushFeedEvent(event: FeedEvent) {
+  feedBuffer.push(event);
+  if (feedBuffer.length > FEED_MAX) feedBuffer.splice(0, feedBuffer.length - FEED_MAX);
+  for (const fn of feedListeners) fn(event);
+}
 
 app.get("/api/feed", (c) => {
   const limit = Math.min(200, +(c.req.query("limit") || "50"));
   const oracle = c.req.query("oracle") || undefined;
-  let events = feedTailer.getRecent(limit);
+  let events = feedBuffer.slice(-limit);
   if (oracle) events = events.filter(e => e.oracle === oracle);
-  const active = [...feedTailer.getActive().keys()];
-  return c.json({ events: events.reverse(), total: events.length, active_oracles: active });
+  const activeMap = new Map<string, FeedEvent>();
+  const cutoff = Date.now() - 5 * 60_000;
+  for (const e of feedBuffer) { if (e.ts >= cutoff) activeMap.set(e.oracle, e); }
+  return c.json({ events: events.reverse(), total: events.length, active_oracles: [...activeMap.keys()] });
+});
+
+app.post("/api/feed", async (c) => {
+  const body = await c.req.json();
+  const event: FeedEvent = {
+    timestamp: body.timestamp || new Date().toISOString(),
+    oracle: body.oracle || "unknown",
+    host: body.host || "local",
+    event: body.event || "Notification",
+    project: body.project || "",
+    sessionId: body.sessionId || "",
+    message: body.message || "",
+    ts: body.ts || Date.now(),
+  };
+  pushFeedEvent(event);
+  return c.json({ ok: true });
 });
 
 app.onError((err, c) => c.json({ error: err.message }, 500));
@@ -451,7 +446,7 @@ export { app };
 import { handlePtyMessage, handlePtyClose } from "./pty";
 
 export function startServer(port = +(process.env.MAW_PORT || loadConfig().port || 3456)) {
-  const engine = new MawEngine({ feedTailer });
+  const engine = new MawEngine({ feedBuffer, feedListeners });
 
   const wsHandler = {
     open: (ws: any) => {
@@ -498,73 +493,11 @@ export function startServer(port = +(process.env.MAW_PORT || loadConfig().port |
   return server;
 }
 
-// --- Auto Status Heartbeat (every 15 min) ---
-import { appendFileSync } from "fs";
-import { MAW_LOG_PATH } from "./maw-log";
-
-import { describeActivity } from "./lib/feed";
-
-import { describeActivity } from "./lib/feed";
-
-function statusHeartbeat() {
-  try {
-    const cutoff = Date.now() - 15 * 60_000;
-    const events = feedTailer.getRecent(500).filter(e => e.ts >= cutoff);
-    if (events.length === 0) return;
-
-    // Only count real work events (tool uses, prompts)
-    const workEvents = events.filter(e =>
-      e.event === "PreToolUse" || e.event === "PostToolUse" ||
-      e.event === "UserPromptSubmit" || e.event === "SubagentStart"
-    );
-    if (workEvents.length === 0) return;
-
-    // Group by parent oracle (neo-mawjs → neo, hermes-bitkub → hermes)
-    const byParent = new Map<string, { tools: number; projects: Set<string>; lastActivity: string }>();
-    for (const e of workEvents) {
-      // Extract parent: "neo-oracle" → "neo", "hermes-bitkub" → "hermes", "neo-mawjs" → "neo"
-      const parent = e.oracle.split("-")[0];
-      const prev = byParent.get(parent) || { tools: 0, projects: new Set(), lastActivity: "" };
-      prev.tools++;
-      const proj = e.project.split("/").pop() || "";
-      if (proj) prev.projects.add(proj);
-      prev.lastActivity = describeActivity(e);
-      byParent.set(parent, prev);
-    }
-
-    // Token rate for the same window
-    const rate = realtimeRate(15 * 60);
-    const fmt = (n: number) => n >= 1e9 ? `${(n/1e9).toFixed(1)}B` : n >= 1e6 ? `${(n/1e6).toFixed(1)}M` : n >= 1e3 ? `${(n/1e3).toFixed(1)}K` : `${n}`;
-
-    // Build readable multiline
-    const lines = [...byParent.entries()]
-      .sort((a, b) => b[1].tools - a[1].tools)
-      .map(([name, data]) => `${name}: ${data.tools} actions`);
-
-    const msg = `${byParent.size} oracles, ${workEvents.length} actions\n${lines.join("\n")}\n${fmt(rate.totalPerMin)} tok/min (${fmt(rate.inputPerMin)} in, ${fmt(rate.outputPerMin)} out)`;
-
-    const entry = JSON.stringify({
-      ts: new Date().toISOString(),
-      from: "system",
-      to: "all",
-      msg,
-      ch: "heartbeat",
-    }) + "\n";
-
-    appendFileSync(MAW_LOG_PATH, entry);
-  } catch {}
-}
-
 // Auto-start unless imported by CLI (CLI sets MAW_CLI=1)
 if (!process.env.MAW_CLI) {
-  const server = startServer();
-  // Start heartbeat after 1 min, then every 15 min
-  setTimeout(() => {
-    statusHeartbeat();
-    setInterval(statusHeartbeat, 15 * 60 * 1000);
-  }, 60_000);
+  startServer();
 
-  // Start auto-cleanup sweeper (feedTailer already started by MawEngine)
+  // Start auto-cleanup sweeper (adapted: feedBuffer instead of feedTailer)
   const { startSweeper } = await import("./sweeper");
-  startSweeper(feedTailer);
+  startSweeper(feedBuffer);
 }

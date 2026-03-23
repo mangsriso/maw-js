@@ -17,7 +17,6 @@ mock.module("../src/ssh", () => ({
 
 // Must import after mocking
 const { MawEngine } = await import("../src/engine");
-const { FeedTailer } = await import("../src/feed-tail");
 
 /** Minimal WebSocket stub that records sent messages */
 function makeWS(): { ws: any; messages: any[] } {
@@ -37,8 +36,8 @@ describe("MawEngine", () => {
 
   describe("handleOpen — no stale recent agents", () => {
     test("warm cache sends sessions instantly without recent message", () => {
-      const feedTailer = new FeedTailer();
-      const engine = new MawEngine({ feedTailer });
+      
+      const engine = new MawEngine({ feedBuffer: [], feedListeners: new Set() });
 
       // Simulate warm cache by setting it via broadcastSessions flow
       // @ts-ignore — access private for testing
@@ -59,8 +58,8 @@ describe("MawEngine", () => {
     test("cold cache fetches via tmux.listAll, no recent message", async () => {
       sshResult = "oracles:1:pulse-oracle:1\nhermes:1:hermes-oracle:0";
 
-      const feedTailer = new FeedTailer();
-      const engine = new MawEngine({ feedTailer });
+      
+      const engine = new MawEngine({ feedBuffer: [], feedListeners: new Set() });
 
       const { ws, messages } = makeWS();
       engine.handleOpen(ws as any);
@@ -79,8 +78,8 @@ describe("MawEngine", () => {
     test("sends recent message when agents are running claude", async () => {
       sshResult = "claude";
 
-      const feedTailer = new FeedTailer();
-      const engine = new MawEngine({ feedTailer });
+      
+      const engine = new MawEngine({ feedBuffer: [], feedListeners: new Set() });
 
       // @ts-ignore — access private for testing
       engine.cachedSessions = [
@@ -104,8 +103,8 @@ describe("MawEngine", () => {
     test("no recent message when all agents are idle", async () => {
       sshResult = "zsh";
 
-      const feedTailer = new FeedTailer();
-      const engine = new MawEngine({ feedTailer });
+      
+      const engine = new MawEngine({ feedBuffer: [], feedListeners: new Set() });
 
       // @ts-ignore — access private for testing
       engine.cachedSessions = [
@@ -126,8 +125,8 @@ describe("MawEngine", () => {
     test("broadcasts sessions without recent message", async () => {
       sshResult = "oracles:1:pulse-oracle:1";
 
-      const feedTailer = new FeedTailer();
-      const engine = new MawEngine({ feedTailer });
+      
+      const engine = new MawEngine({ feedBuffer: [], feedListeners: new Set() });
 
       const { ws, messages } = makeWS();
       engine.handleOpen(ws as any);
@@ -149,8 +148,8 @@ describe("MawEngine", () => {
     test("uses single tmux list-windows -a command", async () => {
       sshResult = "oracles:1:pulse-oracle:1\noracles:2:volt-oracle:0";
 
-      const feedTailer = new FeedTailer();
-      const engine = new MawEngine({ feedTailer });
+      
+      const engine = new MawEngine({ feedBuffer: [], feedListeners: new Set() });
 
       const { ws } = makeWS();
       engine.handleOpen(ws as any);
