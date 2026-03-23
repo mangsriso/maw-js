@@ -138,62 +138,73 @@ export class MawEngine {
     } catch {}
   }
 
-  // --- Hash-based status detection ---
-  private agentHashes = new Map<string, { hash: string; changedAt: number; status: string }>();
+  // --- Hybrid status detection: pane command + hash ---
+  private agentState = new Map<string, { hash: string; changedAt: number; status: string }>();
   private statusInterval: ReturnType<typeof setInterval> | null = null;
 
   private async detectStatus() {
     if (this.clients.size === 0 || this.cachedSessions.length === 0) return;
-    const targets = this.cachedSessions.flatMap(s =>
+
+    const agents = this.cachedSessions.flatMap(s =>
       s.windows.map(w => ({ target: `${s.name}:${w.index}`, name: w.name, session: s.name }))
     );
+    const targetList = agents.map(a => a.target);
 
-    await Promise.allSettled(targets.map(async ({ target, name, session }) => {
-      try {
-        const content = await capture(target, 5);
-        const hash = Bun.hash(content).toString(36);
-        const prev = this.agentHashes.get(target);
-        const now = Date.now();
+    // 1. Batch check pane commands (claude/node = agent, zsh/bash = idle)
+    const cmds = await tmux.getPaneCommands(targetList);
 
-        let status = "idle";
-        if (!prev) {
-          this.agentHashes.set(target, { hash, changedAt: now, status: "idle" });
-          return;
-        }
+    // 2. Batch capture last 20 lines for hash comparison
+    const captures = await Promise.allSettled(
+      agents.map(async a => ({ target: a.target, content: await capture(a.target, 20) }))
+    );
+    const contentMap = new Map<string, string>();
+    for (const r of captures) {
+      if (r.status === "fulfilled") contentMap.set(r.value.target, r.value.content);
+    }
 
-        if (hash !== prev.hash) {
-          // Screen changed → busy
-          status = "busy";
-          this.agentHashes.set(target, { hash, changedAt: now, status });
-        } else if (now - prev.changedAt < 15_000) {
-          // Recently changed → still busy
-          status = "busy";
-        } else if (now - prev.changedAt < 60_000) {
-          // Stable for 15-60s → ready
-          status = "ready";
-        } else {
-          // Stable for 60s+ → idle
-          status = "idle";
-        }
+    const now = Date.now();
+    for (const { target, name, session } of agents) {
+      const cmd = (cmds[target] || "").toLowerCase();
+      const isAgent = /claude|codex|node/i.test(cmd);
+      const content = contentMap.get(target) || "";
+      const hash = Bun.hash(content).toString(36);
+      const prev = this.agentState.get(target);
 
-        if (status !== prev.status) {
-          this.agentHashes.set(target, { ...prev, hash, status });
-          // Broadcast as feed event so UI detects it
-          const event: FeedEvent = {
-            timestamp: new Date().toISOString(),
-            oracle: name.replace(/-oracle$/, ""),
-            host: "local",
-            event: status === "busy" ? "PreToolUse" : "Stop",
-            project: session,
-            sessionId: "",
-            message: status === "busy" ? "screen activity detected" : "screen stable",
-            ts: now,
-          };
-          const msg = JSON.stringify({ type: "feed", event });
-          for (const ws of this.clients) ws.send(msg);
-        }
-      } catch {}
-    }));
+      let status: string;
+
+      if (!isAgent) {
+        // Not running Claude → idle
+        status = "idle";
+      } else if (!prev || hash !== prev.hash) {
+        // Running Claude + screen changed → busy
+        status = "busy";
+      } else if (now - prev.changedAt < 15_000) {
+        // Running Claude + recently changed → still busy
+        status = "busy";
+      } else {
+        // Running Claude + stable → ready (waiting for input)
+        status = "ready";
+      }
+
+      const changedAt = (!prev || hash !== prev.hash) ? now : prev.changedAt;
+      this.agentState.set(target, { hash, changedAt, status });
+
+      // Broadcast status change
+      if (prev && status !== prev.status) {
+        const event: FeedEvent = {
+          timestamp: new Date().toISOString(),
+          oracle: name.replace(/-oracle$/, ""),
+          host: "local",
+          event: status === "busy" ? "PreToolUse" : status === "ready" ? "Stop" : "SessionEnd",
+          project: session,
+          sessionId: "",
+          message: status === "busy" ? "working" : status === "ready" ? "waiting" : "idle",
+          ts: now,
+        };
+        const msg = JSON.stringify({ type: "feed", event });
+        for (const ws of this.clients) ws.send(msg);
+      }
+    }
   }
 
   // --- Interval lifecycle ---
