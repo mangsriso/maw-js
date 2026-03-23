@@ -81,6 +81,8 @@ async function attach(ws: ServerWebSocket<any>, target: string, cols: number, ro
     await tmux.newGroupedSession(sessionName, ptySessionName, {
       cols: c, rows: r, window: windowPart || undefined,
     });
+    // Hide status bar in PTY sessions so it doesn't appear in terminal output
+    await tmux.setOption(ptySessionName, "status", "off").catch(() => {});
   } catch {
     ws.send(JSON.stringify({ type: "error", message: "Failed to create PTY session" }));
     return;
@@ -107,6 +109,13 @@ async function attach(ws: ServerWebSocket<any>, target: string, cols: number, ro
   sessions.set(safe, session);
 
   ws.send(JSON.stringify({ type: "attached", target: safe }));
+
+  // Force tmux to redraw — send space+backspace through stdin to trigger output
+  setTimeout(() => {
+    try {
+      proc.stdin?.write(new Uint8Array([12])); // Ctrl+L = redraw screen
+    } catch {}
+  }, 500);
 
   // No resize here — grouped session has its own size from stty
 

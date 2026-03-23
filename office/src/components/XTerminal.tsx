@@ -98,6 +98,29 @@ export function XTerminal({ target, onClose, onNavigate, siblings, onSelectSibli
         if (typeof e.data === "string") {
           try {
             const msg = JSON.parse(e.data);
+            if (msg.type === "attached") {
+              // Force redraw: resize triggers tmux to repaint the full screen
+              setTimeout(() => {
+                try {
+                  fit.fit();
+                  if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+                  }
+                } catch {}
+              }, 500);
+              // Second redraw for slow connections
+              setTimeout(() => {
+                try {
+                  fit.fit();
+                  if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: "resize", cols: term.cols + 1, rows: term.rows }));
+                    setTimeout(() => {
+                      ws?.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+                    }, 100);
+                  }
+                } catch {}
+              }, 1000);
+            }
             if (msg.type === "detached") {
               term.write("\r\n\x1b[33m[session detached]\x1b[0m\r\n");
             }
@@ -128,13 +151,9 @@ export function XTerminal({ target, onClose, onNavigate, siblings, onSelectSibli
         }
       });
 
-      // Modal navigation shortcuts (intercept before xterm processes them)
+      // Esc always goes to tmux — close modal via X button only
       term.attachCustomKeyEventHandler((e) => {
         if (e.type !== "keydown") return true;
-        if (e.key === "Escape" && !e.altKey && !e.ctrlKey && !e.shiftKey) {
-          onCloseRef.current();
-          return false;
-        }
         if (e.altKey && e.key === "ArrowLeft") { onNavigateRef.current(-1); return false; }
         if (e.altKey && e.key === "ArrowRight") { onNavigateRef.current(1); return false; }
         if (e.altKey && e.key >= "1" && e.key <= "9") {

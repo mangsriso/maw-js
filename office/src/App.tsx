@@ -6,8 +6,9 @@ import { StatusBar } from "./components/StatusBar";
 import { RoomGrid } from "./components/RoomGrid";
 import { TerminalModal } from "./components/TerminalModal";
 import { MissionControl } from "./components/MissionControl";
-import { FleetGrid, FleetControls } from "./components/FleetGrid";
+import { FleetGrid, FleetControls, BroadcastModal } from "./components/FleetGrid";
 import { OverviewGrid } from "./components/OverviewGrid";
+import { OrbitalView } from "./components/OrbitalView";
 import { VSView } from "./components/VSView";
 import { ConfigView } from "./components/ConfigView";
 import { TerminalView } from "./components/TerminalView";
@@ -17,13 +18,77 @@ import { ChatView } from "./components/ChatView";
 import { DashboardView } from "./components/DashboardView";
 import { ShortcutOverlay } from "./components/ShortcutOverlay";
 import { JumpOverlay } from "./components/JumpOverlay";
-import { unlockAudio, isAudioUnlocked, setSoundMuted } from "./lib/sounds";
+import { OracleSearch } from "./components/OracleSearch";
+import { unlockAudio, isAudioUnlocked, setSoundMuted, SOUND_PROFILES, getSoundProfile, setSoundProfile, previewSound } from "./lib/sounds";
+
+function FloatingButtons() {
+  const [showSounds, setShowSounds] = useState(false);
+  const [current, setCurrent] = useState(getSoundProfile());
+  const [multiView, setMultiView] = useState(() => localStorage.getItem("office-multiview") !== "0");
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showSounds) return;
+    const handler = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setShowSounds(false); };
+    document.addEventListener("click", handler);
+    return () => document.removeEventListener("click", handler);
+  }, [showSounds]);
+
+  return (
+    <div ref={ref} className="fixed top-20 right-6 flex flex-col gap-3 z-30">
+      <button
+        onClick={() => window.dispatchEvent(new CustomEvent("search-open"))}
+        className="w-14 h-14 rounded-2xl flex items-center justify-center text-xl backdrop-blur-xl active:scale-90 cursor-pointer transition-all shadow-lg"
+        style={{ background: "rgba(34,211,238,0.12)", border: "1px solid rgba(34,211,238,0.25)", color: "#22d3ee" }}
+        title="Oracle Search (⌘K)"
+      >🔍</button>
+      <button
+        onClick={() => window.dispatchEvent(new CustomEvent("broadcast-open"))}
+        className="w-14 h-14 rounded-2xl flex items-center justify-center text-xl backdrop-blur-xl active:scale-90 cursor-pointer transition-all shadow-lg"
+        style={{ background: "rgba(251,191,36,0.12)", border: "1px solid rgba(251,191,36,0.25)", color: "#fbbf24" }}
+        title="Broadcast to all agents"
+      >📢</button>
+      <button
+        onClick={() => setShowSounds(!showSounds)}
+        className="w-14 h-14 rounded-2xl flex items-center justify-center text-xl backdrop-blur-xl active:scale-90 cursor-pointer transition-all shadow-lg"
+        style={{ background: "rgba(168,85,247,0.12)", border: "1px solid rgba(168,85,247,0.25)", color: "#a855f7" }}
+        title="Change notification sound"
+      >{SOUND_PROFILES.find(p => p.id === current)?.emoji || "🔔"}</button>
+
+      <button
+        onClick={() => {
+          const next = !multiView;
+          setMultiView(next);
+          localStorage.setItem("office-multiview", next ? "1" : "0");
+          window.dispatchEvent(new CustomEvent("multiview-change", { detail: next }));
+        }}
+        className="w-14 h-14 rounded-2xl flex items-center justify-center text-xl backdrop-blur-xl active:scale-90 cursor-pointer transition-all shadow-lg"
+        style={{ background: multiView ? "rgba(34,197,94,0.12)" : "rgba(255,255,255,0.06)", border: `1px solid ${multiView ? "rgba(34,197,94,0.25)" : "rgba(255,255,255,0.1)"}`, color: multiView ? "#22c55e" : "#666" }}
+        title={multiView ? "Multi-card view (click for single)" : "Single card view (click for multi)"}
+      >{multiView ? "📺" : "1️⃣"}</button>
+
+      {showSounds && (
+        <div className="absolute right-16 top-[8.5rem] rounded-2xl overflow-hidden" style={{ background: "rgba(13,13,24,0.95)", border: "1px solid rgba(255,255,255,0.1)", backdropFilter: "blur(12px)", minWidth: 200 }}>
+          {SOUND_PROFILES.map(p => (
+            <button key={p.id} onClick={() => { setSoundProfile(p.id); setCurrent(p.id); previewSound(p.id); }}
+              className="w-full flex items-center gap-3 px-5 py-3.5 text-left transition-colors hover:bg-white/[0.06]"
+              style={{ background: current === p.id ? "rgba(168,85,247,0.12)" : "transparent" }}>
+              <span className="text-2xl">{p.emoji}</span>
+              <span className="text-sm font-mono" style={{ color: current === p.id ? "#a855f7" : "rgba(255,255,255,0.5)" }}>{p.label}</span>
+              {current === p.id && <span className="ml-auto text-sm text-purple-400">✓</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 import { useFleetStore } from "./lib/store";
 import type { AgentState } from "./lib/types";
 
 function parseHash(raw: string): { view: string; agentName: string | null } {
   const parts = raw.split("/");
-  const view = parts[0] || "office";
+  const view = parts[0] || "mission";
   const agentName = parts[1] || null;
   return { view, agentName };
 }
@@ -40,12 +105,12 @@ function useHashRoute() {
       window.location.hash = lastView;
       return lastView;
     }
-    return "office";
+    return "mission";
   });
 
   useEffect(() => {
     const onHash = () => {
-      const h = window.location.hash.slice(1) || "office";
+      const h = window.location.hash.slice(1) || "mission";
       setHash(h);
       // Persist just the view part (not the agent)
       setLastView(parseHash(h).view);
@@ -79,11 +144,12 @@ function useAudioUnlock() {
 }
 
 /** Shared layout — StatusBar + overlays rendered once for all views */
-function Layout({ activeView, connected, agentCount, sessionCount, askCount, muted, onToggleMute, onJump, onInbox, statusBarChildren, terminalModal, showShortcuts, onCloseShortcuts, jumpOverlay, inboxOverlay, fullHeight, children }: {
+function Layout({ activeView, connected, agentCount, sessionCount, tabCount, askCount, muted, onToggleMute, onJump, onInbox, statusBarChildren, terminalModal, showShortcuts, onCloseShortcuts, jumpOverlay, inboxOverlay, broadcastModal, fullHeight, children }: {
   activeView: string;
   connected: boolean;
   agentCount: number;
   sessionCount: number;
+  tabCount?: number;
   askCount: number;
   muted: boolean;
   onToggleMute: () => void;
@@ -95,6 +161,7 @@ function Layout({ activeView, connected, agentCount, sessionCount, askCount, mut
   onCloseShortcuts: () => void;
   jumpOverlay: ReactNode;
   inboxOverlay: ReactNode;
+  broadcastModal?: ReactNode;
   fullHeight?: boolean;
   children: ReactNode;
 }) {
@@ -105,7 +172,7 @@ function Layout({ activeView, connected, agentCount, sessionCount, askCount, mut
   return (
     <div className={wrapperClass} style={{ background: "#020208" }}>
       <div className={`relative z-10${fullHeight ? " flex-shrink-0" : ""}`}>
-        <StatusBar connected={connected} agentCount={agentCount} sessionCount={sessionCount} activeView={activeView} onJump={onJump} askCount={askCount} onInbox={onInbox} muted={muted} onToggleMute={onToggleMute}>
+        <StatusBar connected={connected} agentCount={agentCount} sessionCount={sessionCount} tabCount={tabCount} activeView={activeView} onJump={onJump} askCount={askCount} onInbox={onInbox} muted={muted} onToggleMute={onToggleMute}>
           {statusBarChildren}
         </StatusBar>
       </div>
@@ -114,6 +181,10 @@ function Layout({ activeView, connected, agentCount, sessionCount, askCount, mut
       {showShortcuts && <ShortcutOverlay onClose={onCloseShortcuts} />}
       {jumpOverlay}
       {inboxOverlay}
+      {broadcastModal}
+
+      {/* Floating action buttons — top right */}
+      <FloatingButtons />
     </div>
   );
 }
@@ -126,6 +197,17 @@ export function App() {
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showJump, setShowJump] = useState(false);
   const [showInbox, setShowInbox] = useState(false);
+  const [showBroadcast, setShowBroadcast] = useState(false);
+  const [showOracleSearch, setShowOracleSearch] = useState(false);
+
+  // Listen for floating button events
+  useEffect(() => {
+    const onBroadcast = () => setShowBroadcast(true);
+    const onSearch = () => setShowOracleSearch(true);
+    window.addEventListener("broadcast-open", onBroadcast);
+    window.addEventListener("search-open", onSearch);
+    return () => { window.removeEventListener("broadcast-open", onBroadcast); window.removeEventListener("search-open", onSearch); };
+  }, []);
 
   // "?" key opens shortcut overlay, "j" or Ctrl+K opens jump overlay
   useEffect(() => {
@@ -223,6 +305,7 @@ export function App() {
     connected,
     agentCount: agents.length,
     sessionCount: sessions.length,
+    tabCount: sessions.reduce((sum, s) => sum + s.windows.length, 0),
     askCount,
     muted,
     onToggleMute: toggleMuted,
@@ -235,6 +318,10 @@ export function App() {
     onCloseShortcuts: () => setShowShortcuts(false),
     jumpOverlay: showJump ? <JumpOverlay agents={agents} onSelect={onSelectAgent} onClose={() => setShowJump(false)} /> : null,
     inboxOverlay: showInbox ? <InboxOverlay send={send} onClose={() => setShowInbox(false)} /> : null,
+    broadcastModal: (<>
+      {showBroadcast && <BroadcastModal agents={agents} send={send} onClose={() => setShowBroadcast(false)} />}
+      {showOracleSearch && <OracleSearch onClose={() => setShowOracleSearch(false)} />}
+    </>),
   };
 
   if (route === "office") {
@@ -300,6 +387,14 @@ export function App() {
     return (
       <Layout activeView="terminal" {...layoutProps} fullHeight>
         <TerminalView sessions={sessions} agents={agents} connected={connected} onSelectAgent={onSelectAgent} />
+      </Layout>
+    );
+  }
+
+  if (route === "orbital") {
+    return (
+      <Layout activeView="orbital" {...layoutProps}>
+        <OrbitalView sessions={sessions} agents={agents} connected={connected} onSelectAgent={onSelectAgent} />
       </Layout>
     );
   }

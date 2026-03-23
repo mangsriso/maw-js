@@ -1,6 +1,12 @@
 import { readFileSync, writeFileSync } from "fs";
 import { join } from "path";
+import { execSync } from "child_process";
 import { CONFIG_FILE } from "./paths";
+
+function detectGhqRoot(): string {
+  try { return execSync("ghq root", { encoding: "utf-8" }).trim(); }
+  catch { return join(require("os").homedir(), "Code/github.com"); }
+}
 
 export interface MawConfig {
   host: string;
@@ -16,7 +22,7 @@ export interface MawConfig {
 const DEFAULTS: MawConfig = {
   host: "local",
   port: 3456,
-  ghqRoot: "/home/nat/Code/github.com",
+  ghqRoot: detectGhqRoot(),
   oracleUrl: "http://localhost:47779",
   env: {},
   commands: { default: "claude" },

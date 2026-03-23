@@ -9,6 +9,7 @@ interface HoverPreviewCardProps {
   roomLabel: string;
   accent: string;
   pinned?: boolean;
+  compact?: boolean;
   send?: (msg: object) => void;
   onFullscreen?: () => void;
   onClose?: () => void;
@@ -37,6 +38,7 @@ export const HoverPreviewCard = memo(function HoverPreviewCard({
   roomLabel,
   accent,
   pinned = false,
+  compact = false,
   send,
   onFullscreen,
   onClose,
@@ -194,9 +196,9 @@ export const HoverPreviewCard = memo(function HoverPreviewCard({
       className="flex flex-col overflow-hidden rounded-xl border border-white/[0.08] shadow-2xl"
       style={{
         background: "#0a0a0f",
-        width: PREVIEW_CARD.width,
-        height: "calc(100vh - 120px)",
-        maxHeight: PREVIEW_CARD.maxHeight,
+        width: compact ? "100%" : PREVIEW_CARD.width,
+        height: compact ? "100%" : "calc(100vh - 120px)",
+        maxHeight: compact ? "100%" : PREVIEW_CARD.maxHeight,
       }}
       onMouseDown={(e) => {
         if (pinned && e.target !== inputRef.current) {
@@ -205,7 +207,40 @@ export const HoverPreviewCard = memo(function HoverPreviewCard({
         }
       }}
     >
-      {/* Header with big avatar */}
+      {/* Header — compact (inline) or full (big avatar) */}
+      {compact ? (
+        <div
+          className="flex items-center gap-2.5 px-3 py-2"
+          style={{
+            background: `linear-gradient(90deg, ${accent}15 0%, transparent 100%)`,
+            borderBottom: `1px solid ${accent}20`,
+          }}
+        >
+          <span
+            className="w-2.5 h-2.5 rounded-full shrink-0"
+            style={{
+              background: statusColor,
+              boxShadow: agent.status !== "idle" ? `0 0 6px ${statusColor}` : undefined,
+            }}
+          />
+          <span className="text-xs font-bold tracking-[2px] uppercase truncate" style={{ color: accent }}>
+            {displayName}
+          </span>
+          <span className="text-[9px] font-mono shrink-0" style={{ color: statusColor }}>
+            {STATUS_LABELS[agent.status]}
+          </span>
+          <span className="text-[8px] text-white/25 font-mono shrink-0 ml-auto">{agent.target}</span>
+          {pinned && onClose && (
+            <button
+              onClick={onClose}
+              className="w-8 h-8 rounded-lg flex items-center justify-center text-sm text-white/30 hover:text-white/70 hover:bg-red-500/15 active:scale-90 cursor-pointer transition-all shrink-0"
+              title="Close (Esc)"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      ) : (
       <div
         className="relative flex flex-col items-center pt-6 pb-4 px-4"
         style={{
@@ -357,9 +392,10 @@ export const HoverPreviewCard = memo(function HoverPreviewCard({
 
         <span className="mt-1 text-[9px] text-white/25 font-mono">{agent.target}</span>
       </div>
+      )}
 
-      {/* Event timeline badges — pinned only */}
-      {pinned && eventLog && (() => {
+      {/* Event timeline badges — pinned only, hidden in compact */}
+      {pinned && !compact && eventLog && (() => {
         const events = eventLog.filter(e => e.target === agent.target).slice(-20);
         if (events.length === 0) return null;
         const STATUS_BADGE: Record<string, { bg: string; text: string }> = {
@@ -411,7 +447,7 @@ export const HoverPreviewCard = memo(function HoverPreviewCard({
         {pinned && onClose && (
           <button
             onClick={onClose}
-            className="px-1.5 py-0.5 rounded text-[9px] text-white/30 hover:text-white/60 hover:bg-white/[0.06] cursor-pointer transition-colors"
+            className="w-10 h-10 rounded-xl flex items-center justify-center text-xl font-bold text-white/30 hover:text-white/70 hover:bg-red-500/15 active:scale-90 cursor-pointer transition-all"
             title="Close (Esc)"
           >
             ✕
@@ -551,8 +587,8 @@ export const HoverPreviewCard = memo(function HoverPreviewCard({
         </div>
       )}
 
-      {/* Shortcut hints — always visible when pinned */}
-      {pinned && (
+      {/* Shortcut hints — pinned only, hidden in compact */}
+      {pinned && !compact && (
         <div className="flex items-center justify-center gap-3 px-3 py-1.5 bg-[#08080c] border-t border-white/[0.04] font-mono text-[8px] text-white/20">
           <span><kbd className="text-white/30">Enter</kbd> send</span>
           <span><kbd className="text-white/30">⌃Enter</kbd> fullscreen</span>
