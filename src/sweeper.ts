@@ -7,7 +7,7 @@
  *
  * Static workers (lifecycle: "static" in fleet config) are never touched.
  *
- * Adapted: FeedTailer → FeedEvent[] (in-memory buffer from server.ts)
+ * Uses FeedEvent[] in-memory buffer from server.ts for activity detection.
  */
 
 import { readdirSync, readFileSync } from "fs";
