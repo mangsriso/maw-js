@@ -90,6 +90,28 @@ maw serve [port]                 # start API server (default: 3456)
 
 Full command reference: `maw --help`
 
+## Auto-Cleanup Sweeper
+
+Periodic cleanup of idle ephemeral worktrees. Static workers (fleet configs with `lifecycle: "static"`) are never touched.
+
+```jsonc
+// maw.config.json
+{
+  "autoCleanup": {
+    "enabled": true,
+    "idleTimeout": "2h",     // no feed activity → cleanup
+    "maxAge": "24h",         // absolute max lifetime
+    "sweepInterval": "5m",   // check frequency
+    "notify": false          // Telegram notification on cleanup
+  }
+}
+```
+
+```bash
+maw sweep                            # manual one-shot sweep
+# API: GET /api/sweeper (stats), POST /api/sweeper/run (trigger)
+```
+
 ## Federation API
 
 | Endpoint | Purpose |

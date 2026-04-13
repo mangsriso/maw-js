@@ -64,6 +64,18 @@ export interface MawLimits {
   ptyRows?: number;
 }
 
+export interface AutoCleanupConfig {
+  enabled: boolean;
+  /** Idle timeout before cleanup (e.g., "2h", "30m"). Default: "2h" */
+  idleTimeout: string;
+  /** Absolute max age regardless of activity (e.g., "24h"). Default: "24h" */
+  maxAge: string;
+  /** Sweep interval (e.g., "5m"). Default: "5m" */
+  sweepInterval: string;
+  /** Notify Telegram on cleanup. Default: false */
+  notify: boolean;
+}
+
 export interface MawConfig {
   host: string;
   port: number;
@@ -104,6 +116,8 @@ export interface MawConfig {
   hmacWindowSeconds?: number;
   /** PIN for web UI */
   pin?: string;
+  /** Auto-cleanup sweeper config */
+  autoCleanup?: AutoCleanupConfig;
 }
 
 const DEFAULTS: MawConfig = {
@@ -114,6 +128,13 @@ const DEFAULTS: MawConfig = {
   env: {},
   commands: { default: "claude" },
   sessions: {},
+  autoCleanup: {
+    enabled: false,
+    idleTimeout: "2h",
+    maxAge: "24h",
+    sweepInterval: "5m",
+    notify: false,
+  },
 };
 
 /** Typed defaults for intervals, timeouts, limits (#172) */
@@ -508,4 +529,19 @@ export function buildCommandInDir(agentName: string, cwd: string): string {
 /** Get env vars from config (for tmux set-environment) */
 export function getEnvVars(): Record<string, string> {
   return loadConfig().env || {};
+}
+
+/** Parse duration string (e.g., "2h", "30m", "1d") to milliseconds */
+export function parseDuration(s: string): number {
+  const match = s.match(/^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)$/);
+  if (!match) return 2 * 60 * 60_000; // default 2h
+  const n = parseFloat(match[1]);
+  switch (match[2]) {
+    case "ms": return n;
+    case "s": return n * 1000;
+    case "m": return n * 60_000;
+    case "h": return n * 3_600_000;
+    case "d": return n * 86_400_000;
+    default: return 2 * 3_600_000;
+  }
 }

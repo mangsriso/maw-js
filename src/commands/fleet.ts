@@ -10,6 +10,9 @@ import { saveTabOrder, restoreTabOrder } from "../tab-order";
 interface FleetWindow {
   name: string;
   repo: string;
+  lifecycle?: "static" | "ephemeral";
+  /** Time-to-live override (e.g., "4h"). Only for ephemeral. */
+  ttl?: string;
 }
 
 interface FleetSession {

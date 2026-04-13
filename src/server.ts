@@ -196,6 +196,14 @@ export async function startServer(port = +(process.env.MAW_PORT || loadConfig().
     console.log(`maw serve → https://localhost:${tlsPort} (wss://localhost:${tlsPort}/ws) [TLS]`);
   }
 
+  // Start auto-cleanup sweeper (framework-agnostic: uses setInterval + feedBuffer)
+  try {
+    const { startSweeper } = await import("./sweeper");
+    startSweeper(feedBuffer);
+  } catch (err) {
+    console.error("[sweeper] failed to init:", err);
+  }
+
   return server;
 }
 

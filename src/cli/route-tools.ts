@@ -183,6 +183,16 @@ export async function routeTools(cmd: string, args: string[]): Promise<boolean> 
     await cmdAgents({ json: flags["--json"], all: flags["--all"], node: flags["--node"] });
     return true;
   }
+  if (cmd === "sweep") {
+    const { sweep } = await import("../sweeper");
+    const { feedBuffer } = await import("../api/feed");
+    console.log("Running sweep...");
+    const result = await sweep(feedBuffer);
+    console.log(`Scanned: ${result.scanned}, Cleaned: ${result.cleanedIdle} idle + ${result.cleanedMaxAge} max-age, Skipped: ${result.skippedStatic} static`);
+    if (result.errors.length > 0) console.log("Errors:", result.errors.join(", "));
+    for (const d of result.details) console.log(`  ${d.name}: ${d.reason}`);
+    return true;
+  }
   if (cmd === "serve") {
     const portArg = args.find(a => a !== "serve" && /^\d+$/.test(a));
     const { startServer } = await import("../server");

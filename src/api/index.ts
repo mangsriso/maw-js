@@ -22,6 +22,7 @@ import { proxyApi } from "./proxy";
 import { pulseApi } from "./pulse";
 import { pluginsRouter } from "./plugins";
 import { uploadApi } from "./upload";
+import { sweeperApi } from "./sweeper";
 import { federationAuth } from "../lib/elysia-auth";
 
 export const api = new Elysia({ prefix: "/api" })
@@ -57,4 +58,5 @@ export const api = new Elysia({ prefix: "/api" })
   .use(proxyApi)
   .use(pulseApi)
   .use(pluginsRouter)
-  .use(uploadApi);
+  .use(uploadApi)
+  .use(sweeperApi);
