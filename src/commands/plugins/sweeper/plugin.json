@@ -1,0 +1,21 @@
+{
+  "name": "sweeper",
+  "version": "1.0.0",
+  "entry": "./index.ts",
+  "sdk": "^1.0.0",
+  "description": "Auto-cleanup idle ephemeral worktrees",
+  "author": "mangsriso",
+  "cli": {
+    "command": "sweep",
+    "aliases": [],
+    "help": "maw sweep [--dry-run] — scan and clean idle/expired worktrees",
+    "flags": {
+      "dry-run": "boolean"
+    }
+  },
+  "api": {
+    "path": "/api/sweeper",
+    "methods": ["GET", "POST"]
+  },
+  "weight": 50
+}

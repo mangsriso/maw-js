@@ -10,6 +10,7 @@ import { api } from "../api";
 import { feedBuffer, feedListeners } from "../api/feed";
 import { mountViews } from "../views/index";
 import { setupTriggerListener } from "./runtime/trigger-listener";
+import { startSweeper } from "../plugins/builtin/sweeper-daemon";
 import { createTransportRouter } from "../transports";
 import { listSessions } from "./transport/ssh";
 import { Tmux } from "./transport/tmux";
@@ -100,6 +101,9 @@ export async function startServer(port = +(process.env.MAW_PORT || loadConfig().
 
   // Hook workflow triggers into feed events
   setupTriggerListener(feedListeners);
+
+  // Auto-cleanup sweeper daemon
+  startSweeper().catch(err => console.error("[sweeper] startup failed:", err));
 
   // Plugin system — built-in + user plugins
   try {

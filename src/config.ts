@@ -64,6 +64,14 @@ export interface MawLimits {
   ptyRows?: number;
 }
 
+export interface AutoCleanupConfig {
+  enabled: boolean;
+  idleTimeout: string;
+  maxAge: string;
+  sweepInterval: string;
+  notify: boolean;
+}
+
 export interface MawConfig {
   host: string;
   port: number;
@@ -108,6 +116,8 @@ export interface MawConfig {
   pluginSources?: string[];
   /** Plugin names to disable (skip during scanning and execution) */
   disabledPlugins?: string[];
+  /** Auto-cleanup sweeper config */
+  autoCleanup?: AutoCleanupConfig;
 }
 
 const DEFAULTS: MawConfig = {
@@ -118,6 +128,13 @@ const DEFAULTS: MawConfig = {
   env: {},
   commands: { default: "claude" },
   sessions: {},
+  autoCleanup: {
+    enabled: false,
+    idleTimeout: "2h",
+    maxAge: "24h",
+    sweepInterval: "5m",
+    notify: false,
+  },
 };
 
 /** Typed defaults for intervals, timeouts, limits (#172) */
@@ -351,6 +368,22 @@ function validateConfig(raw: Record<string, unknown>): Partial<MawConfig> {
     result.nanoclaw = raw.nanoclaw;
   }
 
+  // autoCleanup: sweeper config
+  if ("autoCleanup" in raw) {
+    if (raw.autoCleanup && typeof raw.autoCleanup === "object" && !Array.isArray(raw.autoCleanup)) {
+      const ac = raw.autoCleanup as Record<string, unknown>;
+      result.autoCleanup = {
+        enabled: typeof ac.enabled === "boolean" ? ac.enabled : false,
+        idleTimeout: typeof ac.idleTimeout === "string" ? ac.idleTimeout : "2h",
+        maxAge: typeof ac.maxAge === "string" ? ac.maxAge : "24h",
+        sweepInterval: typeof ac.sweepInterval === "string" ? ac.sweepInterval : "5m",
+        notify: typeof ac.notify === "boolean" ? ac.notify : false,
+      };
+    } else {
+      warn("autoCleanup", "must be an object");
+    }
+  }
+
   return result as Partial<MawConfig>;
 }
 
@@ -435,6 +468,12 @@ export function validateConfigShape(config: unknown): string[] {
       for (let i = 0; i < c.peers.length; i++) {
         if (typeof c.peers[i] !== "string") errors.push(`peers[${i}] must be a string`);
       }
+    }
+  }
+
+  if (c.autoCleanup !== undefined) {
+    if (!c.autoCleanup || typeof c.autoCleanup !== "object" || Array.isArray(c.autoCleanup)) {
+      errors.push("autoCleanup must be an object");
     }
   }
 
