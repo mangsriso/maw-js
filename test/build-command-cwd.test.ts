@@ -7,7 +7,7 @@ import { describe, test, expect, mock } from "bun:test";
 // alphabetically). Without listSessions here, anything that transitively
 // imports ../src/ssh (e.g. federation-sync.test.ts via peers → federation)
 // blows up at import time with "Export named 'listSessions' not found".
-mock.module("../src/ssh", () => ({
+mock.module("../src/core/transport/ssh", () => ({
   hostExec: async () => "",
   ssh: async () => "",
   findWindow: () => null,

@@ -1,0 +1,14 @@
+{
+  "name": "team",
+  "version": "1.0.0",
+  "entry": "./index.ts",
+  "sdk": "^1.0.0",
+  "description": "Manage agent teams — shutdown and list.",
+  "author": "Soul-Brews-Studio",
+  "cli": {
+    "command": "team",
+    "aliases": [],
+    "help": "maw team <shutdown|list> [args] — Manage agent teams"
+  },
+  "weight": 50
+}

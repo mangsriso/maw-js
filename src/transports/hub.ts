@@ -28,10 +28,10 @@
 
 import { readFileSync, readdirSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
-import type { Transport, TransportTarget, TransportMessage, TransportPresence } from "../transport";
+import type { Transport, TransportTarget, TransportMessage, TransportPresence } from "../core/transport/transport";
 import type { FeedEvent } from "../lib/feed";
 import { sign } from "../lib/federation-auth";
-import { CONFIG_DIR } from "../paths";
+import { CONFIG_DIR } from "../core/paths";
 import { loadConfig } from "../config";
 
 // Bun provides WebSocket as a global (browser-standard API)

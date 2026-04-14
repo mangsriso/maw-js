@@ -116,7 +116,7 @@ describe("soul-sync", () => {
     });
 
     test("resolveProjectSlug handles github.com-rooted ghqRoot (#193)", () => {
-      const { resolveProjectSlug } = require("../src/commands/soul-sync");
+      const { resolveProjectSlug } = require("../src/commands/plugins/soul-sync/impl");
       const ghqRoot = "/home/neo/Code/github.com";
       expect(
         resolveProjectSlug("/home/neo/Code/github.com/Soul-Brews-Studio/maw-js", ghqRoot)
@@ -124,7 +124,7 @@ describe("soul-sync", () => {
     });
 
     test("resolveProjectSlug handles bare ghq root (#193 — was dropping repo segment)", () => {
-      const { resolveProjectSlug } = require("../src/commands/soul-sync");
+      const { resolveProjectSlug } = require("../src/commands/plugins/soul-sync/impl");
       const ghqRoot = "/home/neo/Code";
       // Before the fix this returned "github.com/Soul-Brews-Studio" (org-only) —
       // slice(0, 2) was grabbing [host, org] instead of [org, repo].
@@ -134,7 +134,7 @@ describe("soul-sync", () => {
     });
 
     test("resolveProjectSlug strips worktree suffix (#193)", () => {
-      const { resolveProjectSlug } = require("../src/commands/soul-sync");
+      const { resolveProjectSlug } = require("../src/commands/plugins/soul-sync/impl");
       const ghqRoot = "/home/neo/Code/github.com";
       expect(
         resolveProjectSlug("/home/neo/Code/github.com/Soul-Brews-Studio/maw-js.wt-issue-193", ghqRoot)
@@ -142,14 +142,14 @@ describe("soul-sync", () => {
     });
 
     test("resolveProjectSlug returns null when repoRoot is outside ghqRoot (#193)", () => {
-      const { resolveProjectSlug } = require("../src/commands/soul-sync");
+      const { resolveProjectSlug } = require("../src/commands/plugins/soul-sync/impl");
       expect(
         resolveProjectSlug("/tmp/somewhere-else", "/home/neo/Code/github.com")
       ).toBeNull();
     });
 
     test("resolveProjectSlug returns null when path has no repo segment (#193)", () => {
-      const { resolveProjectSlug } = require("../src/commands/soul-sync");
+      const { resolveProjectSlug } = require("../src/commands/plugins/soul-sync/impl");
       // Sitting at the org directory, no repo to resolve.
       expect(
         resolveProjectSlug("/home/neo/Code/github.com/Soul-Brews-Studio", "/home/neo/Code/github.com")

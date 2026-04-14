@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { serveStatic } from "hono/bun";
-import { MAW_ROOT } from "../paths";
+import { MAW_ROOT } from "../core/paths";
 
 export const demoView = new Hono();
 

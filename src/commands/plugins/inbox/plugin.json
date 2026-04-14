@@ -1,0 +1,13 @@
+{
+  "name": "inbox",
+  "version": "1.0.0",
+  "entry": "./index.ts",
+  "sdk": "^1.0.0",
+  "description": "Read and write agent inbox messages.",
+  "author": "Soul-Brews-Studio",
+  "cli": {
+    "command": "inbox",
+    "help": "maw inbox [read <id> | write <msg>]"
+  },
+  "weight": 50
+}

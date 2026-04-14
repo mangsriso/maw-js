@@ -11,7 +11,7 @@ import { oracleApi } from "./oracle";
 import { federationApi } from "./federation";
 import { worktreesApi } from "./worktrees";
 import { uiStateApi } from "./ui-state";
-import { deprecatedApi } from "./deprecated";
+// deprecated.ts removed — 410 stubs for tokens/maw-log APIs no longer needed
 import { costsApi } from "./costs";
 import { triggersApi } from "./triggers";
 import { avengersApi } from "./avengers";
@@ -22,7 +22,7 @@ import { proxyApi } from "./proxy";
 import { pulseApi } from "./pulse";
 import { pluginsRouter } from "./plugins";
 import { uploadApi } from "./upload";
-import { sweeperApi } from "./sweeper";
+import { discoverPackages, invokePlugin } from "../plugin/registry";
 import { federationAuth } from "../lib/elysia-auth";
 
 export const api = new Elysia({ prefix: "/api" })
@@ -48,7 +48,6 @@ export const api = new Elysia({ prefix: "/api" })
   .use(federationApi)
   .use(worktreesApi)
   .use(uiStateApi)
-  .use(deprecatedApi)
   .use(costsApi)
   .use(triggersApi)
   .use(avengersApi)
@@ -58,5 +57,26 @@ export const api = new Elysia({ prefix: "/api" })
   .use(proxyApi)
   .use(pulseApi)
   .use(pluginsRouter)
-  .use(uploadApi)
-  .use(sweeperApi);
+  .use(uploadApi);
+
+// Auto-mount plugin API surfaces from manifests
+const bundledPlugins = discoverPackages();
+for (const p of bundledPlugins) {
+  if (!p.manifest.api) continue;
+  // Strip /api prefix from manifest path — Elysia already has prefix: "/api"
+  const rawPath = p.manifest.api.path;
+  const apiPath = rawPath.startsWith("/api") ? rawPath.slice(4) : rawPath;
+  const { methods } = p.manifest.api;
+  if (methods.includes("GET")) {
+    api.get(apiPath, async ({ query }) => {
+      const result = await invokePlugin(p, { source: "api", args: query ?? {} });
+      return result;
+    });
+  }
+  if (methods.includes("POST")) {
+    api.post(apiPath, async ({ body }) => {
+      const result = await invokePlugin(p, { source: "api", args: body ?? {} });
+      return result;
+    });
+  }
+}

@@ -1,5 +1,5 @@
 import { describe, test, expect, mock, beforeEach } from "bun:test";
-import { Tmux } from "../src/tmux";
+import { Tmux } from "../src/core/transport/tmux";
 
 // Capture all commands sent to ssh()
 let commands: string[] = [];
@@ -14,7 +14,7 @@ const mockExec = async (cmd: string, _host?: string) => {
   commands.push(cmd);
   return sshResult;
 };
-mock.module("../src/ssh", () => ({
+mock.module("../src/core/transport/ssh", () => ({
   hostExec: mockExec,
   ssh: mockExec,
   // Stub: real findWindow/listSessions are tested in 00-ssh.test.ts (loads
@@ -263,7 +263,7 @@ describe("Tmux", () => {
       // Regression: tmux.run() previously wrapped every command with
       // `2>/dev/null`, making wake failures surface as bare "exit 1".
       const throwExec = async (_cmd: string) => { throw new Error("can't find session: neo"); };
-      mock.module("../src/ssh", () => ({
+      mock.module("../src/core/transport/ssh", () => ({
         hostExec: throwExec,
         ssh: throwExec,
       }));
@@ -274,7 +274,7 @@ describe("Tmux", () => {
     test("built command does not include 2>/dev/null", async () => {
       let captured = "";
       const capExec = async (cmd: string) => { captured = cmd; return ""; };
-      mock.module("../src/ssh", () => ({
+      mock.module("../src/core/transport/ssh", () => ({
         hostExec: capExec,
         ssh: capExec,
       }));
@@ -290,7 +290,7 @@ describe("Tmux", () => {
       // Override mock to throw
       const orig = commands;
       const throwExec2 = async () => { throw new Error("session not found"); };
-      mock.module("../src/ssh", () => ({
+      mock.module("../src/core/transport/ssh", () => ({
         hostExec: throwExec2,
         ssh: throwExec2,
       }));
@@ -309,7 +309,7 @@ describe("Tmux", () => {
         capturedHost = host;
         return "";
       };
-      mock.module("../src/ssh", () => ({
+      mock.module("../src/core/transport/ssh", () => ({
         hostExec: hostMock,
         ssh: hostMock,
       }));

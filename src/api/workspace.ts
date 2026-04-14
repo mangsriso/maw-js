@@ -14,7 +14,7 @@ import { Elysia, t} from "elysia";
 import { randomBytes, randomUUID, createHmac, timingSafeEqual } from "crypto";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
-import { CONFIG_DIR } from "../paths";
+import { CONFIG_DIR } from "../core/paths";
 
 // --- Types ---
 

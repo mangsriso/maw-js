@@ -1,5 +1,5 @@
 import { Elysia, t} from "elysia";
-import { scanWorktrees, cleanupWorktree } from "../worktrees";
+import { scanWorktrees, cleanupWorktree } from "../core/fleet/worktrees";
 
 export const worktreesApi = new Elysia();
 

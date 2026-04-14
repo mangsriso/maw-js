@@ -1,149 +1,6 @@
-import { cmdView } from "../commands/view";
-import { cmdCompletions } from "../commands/completions";
-import { cmdTab } from "../commands/tab";
-import { cmdRename } from "../commands/rename";
-import { cmdWorkon } from "../commands/workon";
-import { cmdPark, cmdParkLs, cmdResume } from "../commands/park";
-import { cmdContactsLs, cmdContactsAdd, cmdContactsRm } from "../commands/contacts";
-import { cmdInboxLs, cmdInboxRead, cmdInboxWrite } from "../commands/inbox";
-import { cmdAssign } from "../commands/assign";
-import { cmdPr } from "../commands/pr";
-import { cmdCosts } from "../commands/costs";
-import { cmdTriggers } from "../commands/triggers";
-import { cmdHealth } from "../commands/health";
-import { cmdUi } from "../commands/ui";
-
 export async function routeTools(cmd: string, args: string[]): Promise<boolean> {
-  if (cmd === "ui") {
-    await cmdUi(args.slice(1));
-    return true;
-  }
-  if (cmd === "view" || cmd === "create-view" || cmd === "attach" || cmd === "a") {
-    if (!args[1]) { console.error("usage: maw view <agent> [window] [--clean]"); process.exit(1); }
-    const { parseFlags } = await import("./parse-args");
-    const flags = parseFlags(args, { "--clean": Boolean }, 1);
-    await cmdView(flags._[0], flags._[1], flags["--clean"]);
-    return true;
-  }
-  if (cmd === "tab" || cmd === "tabs") {
-    await cmdTab(args.slice(1));
-    return true;
-  }
-  if (cmd === "park") {
-    if (args[1] === "ls" || args[1] === "list") {
-      await cmdParkLs();
-    } else {
-      await cmdPark(...args.slice(1));
-    }
-    return true;
-  }
-  if (cmd === "resume" || cmd === "unpause") {
-    await cmdResume(args[1]);
-    return true;
-  }
-  if (cmd === "inbox") {
-    const sub = args[1]?.toLowerCase();
-    if (sub === "read") await cmdInboxRead(args[2]);
-    else if (sub === "write" && args[2]) await cmdInboxWrite(args.slice(2).join(" "));
-    else await cmdInboxLs();
-    return true;
-  }
-  if (cmd === "rename") {
-    if (!args[1] || !args[2]) { console.error("usage: maw rename <tab# or name> <new-name>"); process.exit(1); }
-    await cmdRename(args[1], args[2]);
-    return true;
-  }
-  if (cmd === "contacts" || cmd === "contact") {
-    const sub = args[1]?.toLowerCase();
-    if (sub === "add" && args[2]) await cmdContactsAdd(args[2], args.slice(3));
-    else if ((sub === "rm" || sub === "remove") && args[2]) await cmdContactsRm(args[2]);
-    else await cmdContactsLs();
-    return true;
-  }
-  if (cmd === "workon" || cmd === "work") {
-    if (!args[1]) { console.error("usage: maw workon <repo> [task]"); process.exit(1); }
-    await cmdWorkon(args[1], args[2]);
-    return true;
-  }
-  if (cmd === "assign") {
-    if (!args[1]) { console.error("usage: maw assign <issue-url> [--oracle <name>]"); process.exit(1); }
-    const { parseFlags } = await import("./parse-args");
-    const flags = parseFlags(args, { "--oracle": String }, 1);
-    await cmdAssign(flags._[0], { oracle: flags["--oracle"] });
-    return true;
-  }
-  if (cmd === "costs" || cmd === "cost") {
-    await cmdCosts();
-    return true;
-  }
-  if (cmd === "pr") {
-    await cmdPr(args[1]);
-    return true;
-  }
-  if (cmd === "triggers" || cmd === "trigger") {
-    await cmdTriggers();
-    return true;
-  }
-  if (cmd === "health" || cmd === "status") {
-    await cmdHealth();
-    return true;
-  }
-  if (cmd === "completions") {
-    await cmdCompletions(args[1]);
-    return true;
-  }
-  if (cmd === "ping") {
-    const { cmdPing } = await import("../commands/ping");
-    await cmdPing(args[1]);
-    return true;
-  }
-  if (cmd === "transport" || cmd === "tp") {
-    const sub = args[1]?.toLowerCase();
-    if (!sub || sub === "status") {
-      const { cmdTransportStatus } = await import("../commands/transport");
-      await cmdTransportStatus();
-    } else {
-      console.error("usage: maw transport status");
-      process.exit(1);
-    }
-    return true;
-  }
-  if (cmd === "avengers" || cmd === "avg") {
-    const sub = args[1]?.toLowerCase();
-    const { cmdAvengers } = await import("../commands/avengers");
-    await cmdAvengers(sub || "status");
-    return true;
-  }
-  // maw on <oracle> <event> --once "<action>" — create one-time trigger (#149)
-  if (cmd === "on") {
-    const oracle = args[1];
-    const event = args[2] as "agent-idle" | "agent-wake" | "agent-crash";
-    const isOnce = args.includes("--once");
-    const actionIdx = args.indexOf("--once") !== -1 ? args.indexOf("--once") + 1 : 3;
-    const action = args.slice(actionIdx).filter(a => a !== "--once").join(" ");
-    const timeoutIdx = args.indexOf("--timeout");
-    const timeout = timeoutIdx !== -1 ? parseInt(args[timeoutIdx + 1]) : 30;
-
-    if (!oracle || !event || !action) {
-      console.log(`\x1b[36mUsage:\x1b[0m maw on <oracle> <event> [--once] [--timeout N] "<action>"`);
-      console.log(`\n\x1b[33mEvents:\x1b[0m agent-idle, agent-wake, agent-crash`);
-      console.log(`\n\x1b[33mExamples:\x1b[0m`);
-      console.log(`  maw on neo idle --once "maw hey homekeeper 'neo done'"`);
-      console.log(`  maw on neo crash "maw wake neo"`);
-      return true;
-    }
-
-    const { loadConfig, saveConfig } = await import("../config");
-    const config = loadConfig();
-    const trigger = { on: `agent-${event}` as any, repo: oracle, timeout, action, name: `on-${oracle}-${event}`, once: isOnce || undefined };
-    const triggers = [...(config.triggers || []), trigger];
-    saveConfig({ triggers });
-    const badge = isOnce ? " \x1b[33m[once]\x1b[0m" : "";
-    console.log(`\x1b[32m✓\x1b[0m trigger added: on ${oracle} ${event}${badge} → ${action}`);
-    return true;
-  }
   if (cmd === "plugins") {
-    const { cmdPlugins } = await import("../commands/plugins");
+    const { cmdPlugins } = await import("../commands/shared/plugins");
     const { parseFlags } = await import("./parse-args");
     const sub = args[1] ?? "ls";
     const flags = parseFlags(args, { "--json": Boolean, "--force": Boolean }, 2);
@@ -152,8 +9,16 @@ export async function routeTools(cmd: string, args: string[]): Promise<boolean> 
   }
   if (cmd === "plugin") {
     const sub = args[1]?.toLowerCase();
+    // "maw plugin ls/info/install/remove" → forward to plugins (plural) handler
+    if (sub && ["ls", "list", "info", "install", "remove", "uninstall", "rm", "lean", "nuke", "enable", "disable"].includes(sub)) {
+      const { cmdPlugins } = await import("../commands/shared/plugins");
+      const { parseFlags } = await import("./parse-args");
+      const flags = parseFlags(args, { "--json": Boolean, "--force": Boolean }, 2);
+      await cmdPlugins(sub, args.slice(2), flags);
+      return true;
+    }
     if (sub === "create") {
-      const { cmdPluginCreate } = await import("../commands/plugin-create");
+      const { cmdPluginCreate } = await import("../commands/shared/plugin-create");
       const { parseFlags } = await import("./parse-args");
       const flags = parseFlags(args, {
         "--rust": Boolean,
@@ -169,7 +34,7 @@ export async function routeTools(cmd: string, args: string[]): Promise<boolean> 
     return true;
   }
   if (cmd === "artifacts" || cmd === "artifact") {
-    const { cmdArtifacts } = await import("../commands/artifacts");
+    const { cmdArtifacts } = await import("../commands/shared/artifacts");
     const { parseFlags } = await import("./parse-args");
     const sub = args[1] ?? "ls";
     const flags = parseFlags(args, { "--json": Boolean }, 2);
@@ -177,7 +42,7 @@ export async function routeTools(cmd: string, args: string[]): Promise<boolean> 
     return true;
   }
   if (cmd === "agents" || cmd === "agent") {
-    const { cmdAgents } = await import("../commands/agents");
+    const { cmdAgents } = await import("../commands/shared/agents");
     const { parseFlags } = await import("./parse-args");
     const flags = parseFlags(args, { "--json": Boolean, "--all": Boolean, "--node": String }, 1);
     await cmdAgents({ json: flags["--json"], all: flags["--all"], node: flags["--node"] });
@@ -195,7 +60,7 @@ export async function routeTools(cmd: string, args: string[]): Promise<boolean> 
   }
   if (cmd === "serve") {
     const portArg = args.find(a => a !== "serve" && /^\d+$/.test(a));
-    const { startServer } = await import("../server");
+    const { startServer } = await import("../core/server");
     startServer(portArg ? +portArg : 3456);
     return true;
   }

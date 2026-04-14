@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { normalizeWorkspace } from "../src/commands/workspace";
+import { normalizeWorkspace } from "../src/commands/shared/workspace";
 
 describe("normalizeWorkspace", () => {
   test("returns null for null", () => {

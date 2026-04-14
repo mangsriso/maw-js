@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { execSync } from "child_process";
-import { CONFIG_FILE } from "./paths";
+import { CONFIG_FILE } from "./core/paths";
 import { refreshContext } from "./lib/context";
 
 function detectGhqRoot(): string {
@@ -66,13 +66,9 @@ export interface MawLimits {
 
 export interface AutoCleanupConfig {
   enabled: boolean;
-  /** Idle timeout before cleanup (e.g., "2h", "30m"). Default: "2h" */
   idleTimeout: string;
-  /** Absolute max age regardless of activity (e.g., "24h"). Default: "24h" */
   maxAge: string;
-  /** Sweep interval (e.g., "5m"). Default: "5m" */
   sweepInterval: string;
-  /** Notify Telegram on cleanup. Default: false */
   notify: boolean;
 }
 
@@ -116,6 +112,10 @@ export interface MawConfig {
   hmacWindowSeconds?: number;
   /** PIN for web UI */
   pin?: string;
+  /** Plugin source URLs — auto-installed on bootstrap (nuke → first run) */
+  pluginSources?: string[];
+  /** Plugin names to disable (skip during scanning and execution) */
+  disabledPlugins?: string[];
   /** Auto-cleanup sweeper config */
   autoCleanup?: AutoCleanupConfig;
 }
@@ -289,6 +289,24 @@ function validateConfig(raw: Record<string, unknown>): Partial<MawConfig> {
     }
   }
 
+  // pluginSources: string[] of URLs
+  if ("pluginSources" in raw) {
+    if (Array.isArray(raw.pluginSources)) {
+      result.pluginSources = (raw.pluginSources as unknown[]).filter(s => typeof s === "string") as string[];
+    } else {
+      warn("pluginSources", "must be an array of URL strings");
+    }
+  }
+
+  // disabledPlugins: string[] of plugin names
+  if ("disabledPlugins" in raw) {
+    if (Array.isArray(raw.disabledPlugins)) {
+      result.disabledPlugins = (raw.disabledPlugins as unknown[]).filter(s => typeof s === "string") as string[];
+    } else {
+      warn("disabledPlugins", "must be an array of plugin names");
+    }
+  }
+
   // node: string if present
   if ("node" in raw) {
     if (typeof raw.node === "string" && raw.node.trim().length > 0) {
@@ -348,6 +366,22 @@ function validateConfig(raw: Record<string, unknown>): Partial<MawConfig> {
   // nanoclaw: pass through (bridge config)
   if ("nanoclaw" in raw && raw.nanoclaw && typeof raw.nanoclaw === "object") {
     result.nanoclaw = raw.nanoclaw;
+  }
+
+  // autoCleanup: sweeper config
+  if ("autoCleanup" in raw) {
+    if (raw.autoCleanup && typeof raw.autoCleanup === "object" && !Array.isArray(raw.autoCleanup)) {
+      const ac = raw.autoCleanup as Record<string, unknown>;
+      result.autoCleanup = {
+        enabled: typeof ac.enabled === "boolean" ? ac.enabled : false,
+        idleTimeout: typeof ac.idleTimeout === "string" ? ac.idleTimeout : "2h",
+        maxAge: typeof ac.maxAge === "string" ? ac.maxAge : "24h",
+        sweepInterval: typeof ac.sweepInterval === "string" ? ac.sweepInterval : "5m",
+        notify: typeof ac.notify === "boolean" ? ac.notify : false,
+      };
+    } else {
+      warn("autoCleanup", "must be an object");
+    }
   }
 
   return result as Partial<MawConfig>;
@@ -434,6 +468,12 @@ export function validateConfigShape(config: unknown): string[] {
       for (let i = 0; i < c.peers.length; i++) {
         if (typeof c.peers[i] !== "string") errors.push(`peers[${i}] must be a string`);
       }
+    }
+  }
+
+  if (c.autoCleanup !== undefined) {
+    if (!c.autoCleanup || typeof c.autoCleanup !== "object" || Array.isArray(c.autoCleanup)) {
+      errors.push("autoCleanup must be an object");
     }
   }
 
@@ -529,19 +569,4 @@ export function buildCommandInDir(agentName: string, cwd: string): string {
 /** Get env vars from config (for tmux set-environment) */
 export function getEnvVars(): Record<string, string> {
   return loadConfig().env || {};
-}
-
-/** Parse duration string (e.g., "2h", "30m", "1d") to milliseconds */
-export function parseDuration(s: string): number {
-  const match = s.match(/^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)$/);
-  if (!match) return 2 * 60 * 60_000; // default 2h
-  const n = parseFloat(match[1]);
-  switch (match[2]) {
-    case "ms": return n;
-    case "s": return n * 1000;
-    case "m": return n * 60_000;
-    case "h": return n * 3_600_000;
-    case "d": return n * 86_400_000;
-    default: return 2 * 3_600_000;
-  }
 }

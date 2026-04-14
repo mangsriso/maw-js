@@ -1,11 +1,11 @@
 import { describe, test, expect } from "bun:test";
 // Import from ../src/find-window directly — NOT from ../src/ssh.
-// Other test files call mock.module("../src/ssh") which globally
+// Other test files call mock.module("../src/core/transport/ssh") which globally
 // replaces the ssh module, breaking findWindow for anyone importing
 // from there. The real implementation lives in find-window.ts which
 // no test mocks, so imports here stay stable.
-import { findWindow } from "../src/find-window";
-import type { Session } from "../src/find-window";
+import { findWindow } from "../src/core/runtime/find-window";
+import type { Session } from "../src/core/runtime/find-window";
 
 const MOCK_SESSIONS: Session[] = [
   {

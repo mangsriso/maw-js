@@ -13,7 +13,7 @@ import {
   buildTunnelCommand,
   parseUiArgs,
   renderUiOutput,
-} from "../src/commands/ui";
+} from "../src/commands/plugins/ui/impl";
 
 // ---- resolvePeerHostPort -------------------------------------------------
 

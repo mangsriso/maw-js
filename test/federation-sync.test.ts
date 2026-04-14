@@ -4,7 +4,7 @@ import {
   applySyncDiff,
   hostedAgents,
   type PeerIdentity,
-} from "../src/commands/federation-sync";
+} from "../src/commands/shared/federation-sync";
 
 /**
  * federation-sync splits I/O (fetchPeerIdentities, cmdFederationSync)

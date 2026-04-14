@@ -13,6 +13,7 @@ import { existsSync, readFileSync, readdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { loadManifestFromDir } from "./manifest";
+import { loadConfig } from "../config";
 import {
   buildImportObject,
   preCacheBridge,
@@ -24,9 +25,10 @@ import type { LoadedPlugin, InvokeContext, InvokeResult } from "./types";
 const PLUGIN_INVOKE_TIMEOUT_MS = 5_000;
 const WASM_MEMORY_MAX_PAGES = 256; // 16MB
 
+// Single scan dir — everything lives in ~/.maw/plugins/
+// Core plugins auto-installed on `maw update` or first run.
 const SCAN_DIRS = [
   join(homedir(), ".maw", "plugins"),
-  join(homedir(), ".oracle", "commands"),
 ];
 
 /**
@@ -36,13 +38,14 @@ const SCAN_DIRS = [
  */
 export function discoverPackages(): LoadedPlugin[] {
   const plugins: LoadedPlugin[] = [];
+  const disabled = loadConfig().disabledPlugins ?? [];
 
   for (const baseDir of SCAN_DIRS) {
     if (!existsSync(baseDir)) continue;
     let entries: string[];
     try {
       entries = readdirSync(baseDir, { withFileTypes: true })
-        .filter(e => e.isDirectory())
+        .filter(e => e.isDirectory() || e.isSymbolicLink())
         .map(e => e.name);
     } catch {
       continue;
@@ -51,12 +54,20 @@ export function discoverPackages(): LoadedPlugin[] {
       const pkgDir = join(baseDir, entry);
       try {
         const loaded = loadManifestFromDir(pkgDir);
-        if (loaded) plugins.push(loaded);
+        if (loaded) {
+          if (disabled.includes(loaded.manifest.name)) {
+            loaded.disabled = true;
+          }
+          plugins.push(loaded);
+        }
       } catch {
         // invalid manifest — skip silently
       }
     }
   }
+
+  // Sort by weight (lower = first, default 50) — like Drupal module weight
+  plugins.sort((a, b) => (a.manifest.weight ?? 50) - (b.manifest.weight ?? 50));
 
   return plugins;
 }
@@ -70,7 +81,73 @@ export async function invokePlugin(
   plugin: LoadedPlugin,
   ctx: InvokeContext,
 ): Promise<InvokeResult> {
-  // Read WASM bytes
+  // Universal flags — every plugin gets these for free
+  if (ctx.source === "cli") {
+    const args = ctx.args as string[];
+    const flag = args[0];
+    const m = plugin.manifest;
+
+    // -v / --version — show plugin metadata
+    if (flag === "-v" || flag === "--version" || flag === "-version") {
+      const surfaces = [
+        m.cli ? `cli:${m.cli.command}` : null,
+        m.api ? `api:${m.api.path}` : null,
+        m.hooks ? "hooks" : null,
+        m.transport?.peer ? "peer" : null,
+      ].filter(Boolean).join(", ");
+      return {
+        ok: true,
+        output: `${m.name} v${m.version} (${plugin.kind}, weight:${m.weight ?? 50})\n  ${m.description || ""}\n  surfaces: ${surfaces}\n  dir: ${plugin.dir}`,
+      };
+    }
+
+    // -h / --help — show usage + flags + surfaces
+    if (flag === "-h" || flag === "--help" || flag === "-help") {
+      const lines: string[] = [];
+      lines.push(`${m.name} v${m.version}`);
+      if (m.description) lines.push(`  ${m.description}`);
+      lines.push("");
+      if (m.cli?.help) lines.push(`  usage: ${m.cli.help}`);
+      else if (m.cli) lines.push(`  usage: maw ${m.cli.command}`);
+      if (m.cli?.aliases?.length) lines.push(`  aliases: ${m.cli.aliases.join(", ")}`);
+      if (m.cli?.flags) {
+        lines.push("  flags:");
+        for (const [k, v] of Object.entries(m.cli.flags)) lines.push(`    ${k.padEnd(20)} ${v}`);
+      }
+      lines.push("");
+      lines.push("  surfaces:");
+      if (m.cli) lines.push(`    cli: maw ${m.cli.command}`);
+      if (m.api) lines.push(`    api: ${m.api.methods.join("/")} ${m.api.path}`);
+      if (m.transport?.peer) lines.push(`    peer: maw hey plugin:${m.name}`);
+      if (m.hooks) lines.push(`    hooks: ${Object.keys(m.hooks).join(", ")}`);
+      lines.push(`\n  dir: ${plugin.dir}`);
+      return { ok: true, output: lines.join("\n") };
+    }
+  }
+
+  // TS plugins — import and call handler directly (full access)
+  if (plugin.kind === "ts" && plugin.entryPath) {
+    // Guard process.exit — cmd* functions call it on error. Convert to throw
+    // so the handler's try/catch can capture the output and return it.
+    const origExit = process.exit;
+    process.exit = ((code?: number) => { throw Object.assign(new Error("exit"), { exitCode: code ?? 0 }); }) as any;
+
+    try {
+      const mod = await import(plugin.entryPath);
+      const handler = mod.default || mod.handler;
+      if (!handler) return { ok: false, error: "TS plugin has no default export or handler" };
+
+      const result = await handler(ctx);
+      if (result && typeof result === "object" && "ok" in result) return result;
+      return { ok: true };
+    } catch (err: any) {
+      return { ok: false, error: err.message };
+    } finally {
+      process.exit = origExit;
+    }
+  }
+
+  // WASM plugins — instantiate and call handle(ptr, len) in sandbox
   let wasmBytes: Uint8Array;
   try {
     wasmBytes = readFileSync(plugin.wasmPath);

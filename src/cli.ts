@@ -1,16 +1,12 @@
 #!/usr/bin/env bun
 process.env.MAW_CLI = "1";
 
-import { cmdPeek, cmdSend } from "./commands/comm";
-import { logAudit } from "./audit";
+import { cmdPeek, cmdSend } from "./commands/shared/comm";
+import { logAudit } from "./core/fleet/audit";
 import { usage } from "./cli/usage";
 import { routeComm } from "./cli/route-comm";
-import { routeAgent } from "./cli/route-agent";
-import { routeFleet } from "./cli/route-fleet";
-import { routeWorkspace } from "./cli/route-workspace";
 import { routeTools } from "./cli/route-tools";
-import { routeTeam } from "./cli/route-team";
-import { scanCommands, matchCommand, executeCommand, listCommands } from "./cli/command-registry";
+import { scanCommands, matchCommand, executeCommand } from "./cli/command-registry";
 import { join } from "path";
 import { homedir } from "os";
 
@@ -63,24 +59,132 @@ if (cmd === "--version" || cmd === "-v" || cmd === "version") {
   } catch { /* ghq not available or link failed — non-fatal */ }
   let after = "";
   try { after = execSync(`maw --version`, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim(); } catch {}
+
+  // Refresh bundled plugin symlinks (point to new install)
+  try {
+    const pluginDir = join(homedir(), ".maw", "plugins");
+    const { existsSync: ex, readdirSync: rd, cpSync: cp, readFileSync: rf, lstatSync: ls, unlinkSync: ul, symlinkSync: sl } = require("fs");
+    const { mkdirSync: mk } = require("fs");
+    mk(pluginDir, { recursive: true });
+    const mawBin = execSync("which maw", { encoding: "utf-8" }).trim();
+    const mawSrc = require("path").dirname(require("fs").realpathSync(mawBin));
+    const bundled = join(mawSrc, "commands", "plugins");
+    if (ex(bundled)) {
+      let refreshed = 0;
+      for (const d of rd(bundled)) {
+        if (ex(join(bundled, d, "plugin.json")) || ex(join(bundled, d, "index.ts"))) {
+          const dest = join(pluginDir, d);
+          // Replace old symlink or missing entry
+          try { if (ls(dest).isSymbolicLink()) ul(dest); } catch {}
+          if (!ex(dest)) { sl(join(bundled, d), dest); refreshed++; }
+        }
+      }
+      if (refreshed > 0) console.log(`\n  🔗 ${refreshed} bundled plugins re-linked`);
+    }
+  } catch {}
+
+  // Update plugins from pluginSources (read config file directly — module path may be stale after reinstall)
+  try {
+    const configPath = join(homedir(), ".config", "maw", "maw.config.json");
+    const { readFileSync: readF } = require("fs");
+    const rawConfig = JSON.parse(readF(configPath, "utf-8"));
+    const sources: string[] = rawConfig.pluginSources ?? [];
+    if (sources.length > 0) {
+      console.log(`\n  🔌 updating ${sources.length} plugin source(s)...`);
+      const pluginDir = join(homedir(), ".maw", "plugins");
+      for (const url of sources) {
+        try {
+          execSync(`ghq get -u "${url}"`, { stdio: "pipe" });
+          const ghqRoot = execSync("ghq root", { encoding: "utf-8" }).trim();
+          const repoPath = url.replace(/^https?:\/\//, "").replace(/\.git$/, "");
+          const src = join(ghqRoot, repoPath);
+          const pkgDir = join(src, "packages");
+          if (ex(pkgDir)) {
+            let count = 0;
+            for (const pkg of rd(pkgDir)) {
+              if (ex(join(pkgDir, pkg, "plugin.json"))) {
+                const dest = join(pluginDir, pkg);
+                cp(join(pkgDir, pkg), dest, { recursive: true });
+                count++;
+              }
+            }
+            const repoName = url.split("/").pop();
+            console.log(`  ✓ ${repoName}: ${count} plugins updated`);
+          } else if (ex(join(src, "plugin.json"))) {
+            const m = JSON.parse(rf(join(src, "plugin.json"), "utf-8"));
+            cp(src, join(pluginDir, m.name), { recursive: true });
+            console.log(`  ✓ ${m.name} updated`);
+          }
+        } catch (e: any) {
+          console.log(`  ✗ ${url}: ${e.message?.slice(0, 60)}`);
+        }
+      }
+    }
+  } catch {}
+
   console.log(`\n  ✅ done`);
   if (after) console.log(`  to:   ${after}\n`);
   else console.log("");
 } else {
-  // Load command plugins (beta) — ~/.oracle/commands/ and src/commands/plugins/
-  await scanCommands(join(import.meta.dir, "commands", "plugins"), "builtin");
-  await scanCommands(join(homedir(), ".oracle", "commands"), "user");
+  // Auto-bootstrap: if ~/.maw/plugins/ is empty, symlink bundled + install from pluginSources
+  const pluginDir = join(homedir(), ".maw", "plugins");
+  const { mkdirSync, existsSync, readdirSync, cpSync, writeFileSync, readFileSync, symlinkSync, lstatSync, unlinkSync } = require("fs");
+  const { execSync } = require("child_process");
+  mkdirSync(pluginDir, { recursive: true });
+  if (readdirSync(pluginDir).length === 0) {
+    // 1. Symlink bundled plugins (symlinks preserve relative imports)
+    const bundled = join(import.meta.dir, "commands", "plugins");
+    if (existsSync(bundled)) {
+      for (const d of readdirSync(bundled)) {
+        if (existsSync(join(bundled, d, "plugin.json")) || existsSync(join(bundled, d, "index.ts"))) {
+          symlinkSync(join(bundled, d), join(pluginDir, d));
+        }
+      }
+    }
+
+    // 2. Install from pluginSources URLs in config
+    try {
+      const { loadConfig } = await import("./config");
+      const config = loadConfig();
+      const sources: string[] = config.pluginSources ?? [];
+      for (const url of sources) {
+        try {
+          execSync(`ghq get -u "${url}"`, { stdio: "pipe" });
+          const ghqRoot = execSync("ghq root", { encoding: "utf-8" }).trim();
+          const repoPath = url.replace(/^https?:\/\//, "").replace(/\.git$/, "");
+          const src = join(ghqRoot, repoPath);
+          const pkgDir = join(src, "packages");
+          if (existsSync(pkgDir)) {
+            for (const pkg of readdirSync(pkgDir)) {
+              if (existsSync(join(pkgDir, pkg, "plugin.json"))) {
+                const dest = join(pluginDir, pkg);
+                if (!existsSync(dest)) {
+                  cpSync(join(pkgDir, pkg), dest, { recursive: true });
+                }
+              }
+            }
+          } else if (existsSync(join(src, "plugin.json"))) {
+            const manifest = JSON.parse(readFileSync(join(src, "plugin.json"), "utf-8"));
+            const dest = join(pluginDir, manifest.name);
+            if (!existsSync(dest)) cpSync(src, dest, { recursive: true });
+          }
+        } catch {}
+      }
+    } catch {}
+
+    console.log(`[maw] bootstrapped ${readdirSync(pluginDir).length} plugins → ${pluginDir}`);
+  }
+
+  // Load plugins from ~/.maw/plugins/ — the single source of truth
+  await scanCommands(pluginDir, "user");
 
   if (!cmd || cmd === "--help" || cmd === "-h") {
     usage();
   } else {
 
+  // Core routes: hey (transport) + plugin management + serve
   const handled =
     await routeComm(cmd, args) ||
-    await routeTeam(cmd, args) ||
-    await routeAgent(cmd, args) ||
-    await routeFleet(cmd, args) ||
-    await routeWorkspace(cmd, args) ||
     await routeTools(cmd, args);
 
   if (!handled) {
@@ -89,6 +193,21 @@ if (cmd === "--version" || cmd === "-v" || cmd === "version") {
     if (pluginMatch) {
       await executeCommand(pluginMatch.desc, pluginMatch.remaining);
     } else {
+      // Fallback: check plugin registry for bundled commands
+      const { discoverPackages, invokePlugin } = await import("./plugin/registry");
+      const plugins = discoverPackages();
+      const cmdName = args.join(" ").toLowerCase();
+      for (const p of plugins) {
+        if (!p.manifest.cli) continue;
+        const names = [p.manifest.cli.command, ...(p.manifest.cli.aliases || [])];
+        if (names.some(n => cmdName.startsWith(n.toLowerCase()))) {
+          const remaining = cmdName.slice(p.manifest.cli.command.length).trim().split(/\s+/).filter(Boolean);
+          const result = await invokePlugin(p, { source: "cli", args: remaining.length ? remaining : args.slice(1) });
+          if (result.ok && result.output) console.log(result.output);
+          else if (!result.ok) { console.error(result.error); process.exit(1); }
+          process.exit(0);
+        }
+      }
       // Default: agent name shorthand (maw <agent> <msg> or maw <agent>)
       if (args.length >= 2) {
         const f = args.includes("--force");

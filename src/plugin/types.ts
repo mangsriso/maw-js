@@ -3,24 +3,56 @@
  *
  * A plugin package is a directory containing:
  *   plugin.json  — this manifest
- *   <name>.wasm  — the compiled WASM module
+ *   <name>.wasm  — compiled WASM module (sandboxed, portable)
+ *   OR index.ts  — TypeScript entry (full access, Bun only)
+ *
+ * Both types share the same manifest shape. The difference:
+ *   wasm: string  → sandboxed WASM plugin (host functions only)
+ *   entry: string → TS plugin (full maw-js internals access)
  */
 
 export interface PluginManifest {
   name: string;           // unique id, slug-safe /^[a-z0-9-]+$/
   version: string;        // semver e.g. "1.0.0"
-  wasm: string;           // relative path to .wasm from manifest dir
+  weight?: number;        // execution order: lower = first (default 50, like Drupal)
+  wasm?: string;          // relative path to .wasm (WASM plugin)
+  entry?: string;         // relative path to .ts/.js (TS plugin)
   sdk: string;            // semver range e.g. "^1.0.0"
-  cli?: { command: string; help?: string; };
+  cli?: {
+    command: string;
+    aliases?: string[];                    // alternate command names
+    help?: string;
+    flags?: Record<string, string>;        // flag name → "boolean"|"string"|"number"
+  };
   api?: { path: string; methods: ("GET" | "POST")[]; };
   description?: string;
   author?: string;
+  hooks?: {
+    gate?: string[];    // event names to gate
+    filter?: string[];  // event names to filter
+    on?: string[];      // event names to handle
+    late?: string[];    // event names for cleanup
+  };
+  cron?: {
+    schedule: string;   // cron expression
+    handler?: string;   // export name (default: "onTick")
+  };
+  module?: {
+    exports: string[];  // named exports other plugins can import
+    path: string;       // relative path to module file
+  };
+  transport?: {
+    peer?: boolean;     // enable maw hey plugin:<name>
+  };
 }
 
 export interface LoadedPlugin {
   manifest: PluginManifest;
   dir: string;            // absolute dir containing plugin.json
-  wasmPath: string;       // resolved absolute path to .wasm
+  wasmPath: string;       // resolved path to .wasm (empty for TS plugins)
+  entryPath?: string;     // resolved path to .ts/.js (TS plugins only)
+  kind: "wasm" | "ts";    // plugin type
+  disabled?: boolean;     // true if plugin is in disabledPlugins config list
 }
 
 export interface InvokeContext {

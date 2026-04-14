@@ -8,7 +8,7 @@ import {
   checkMissingRepos,
   autoFix,
   type DoctorFinding,
-} from "../src/commands/fleet-doctor";
+} from "../src/commands/shared/fleet-doctor";
 import type { MawConfig, PeerConfig } from "../src/config";
 
 /**

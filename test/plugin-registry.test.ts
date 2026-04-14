@@ -386,7 +386,7 @@ describe("wasm-bridge host functions", () => {
 
 describe("SDK returns typed responses", () => {
   test("identity returns Identity shape", async () => {
-    const { maw } = await import("../src/sdk");
+    const { maw } = await import("../src/core/runtime/sdk");
     const id = await maw.identity();
     // Whether server is up or down, shape must be correct
     expect(typeof id.node).toBe("string");
@@ -397,7 +397,7 @@ describe("SDK returns typed responses", () => {
   });
 
   test("federation returns FederationStatus shape", async () => {
-    const { maw } = await import("../src/sdk");
+    const { maw } = await import("../src/core/runtime/sdk");
     const fed = await maw.federation();
     expect(typeof fed.localUrl).toBe("string");
     expect(Array.isArray(fed.peers)).toBe(true);
@@ -406,7 +406,7 @@ describe("SDK returns typed responses", () => {
   });
 
   test("sessions returns Session[] shape", async () => {
-    const { maw } = await import("../src/sdk");
+    const { maw } = await import("../src/core/runtime/sdk");
     const sess = await maw.sessions();
     expect(Array.isArray(sess)).toBe(true);
     if (sess.length > 0) {
@@ -416,14 +416,14 @@ describe("SDK returns typed responses", () => {
   });
 
   test("feed returns FeedEvent[] or object with events", async () => {
-    const { maw } = await import("../src/sdk");
+    const { maw } = await import("../src/core/runtime/sdk");
     const result = await maw.feed();
     // Server may return array or {events: [...]} — both valid
     expect(result).toBeDefined();
   });
 
   test("maw.fetch returns typed data from live endpoint", async () => {
-    const { maw } = await import("../src/sdk");
+    const { maw } = await import("../src/core/runtime/sdk");
     try {
       const data = await maw.fetch<{ node: string }>("/api/identity");
       expect(typeof data.node).toBe("string");
@@ -434,7 +434,7 @@ describe("SDK returns typed responses", () => {
   });
 
   test("maw.fetch throws on invalid endpoint", async () => {
-    const { maw } = await import("../src/sdk");
+    const { maw } = await import("../src/core/runtime/sdk");
     try {
       await maw.fetch("/api/nonexistent-endpoint-xyzzy");
       // If server is up, 404 should throw

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { buildAgentRows, type AgentRow } from "../src/commands/agents";
+import { buildAgentRows, type AgentRow } from "../src/commands/shared/agents";
 
 // buildAgentRows is pure — no tmux, no I/O needed.
 

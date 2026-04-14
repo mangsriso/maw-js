@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { loadTeam, writeShutdownRequest, _setDirs, cmdTeamList, cmdCleanupZombies } from "../src/commands/team";
+import { loadTeam, writeShutdownRequest, _setDirs, cmdTeamList, cmdCleanupZombies } from "../src/commands/plugins/team/impl";
 
 let testDir: string;
 let teamsDir: string;

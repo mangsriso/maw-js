@@ -3,7 +3,7 @@
  */
 
 import { loadConfig } from "../config";
-import { TransportRouter } from "../transport";
+import { TransportRouter } from "../core/transport/transport";
 import { TmuxTransport } from "./tmux";
 import { HttpTransport } from "./http";
 import { HubTransport, loadWorkspaceConfigs } from "./hub";

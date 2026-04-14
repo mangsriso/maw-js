@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { readdirSync, readFileSync } from "fs";
 import { join } from "path";
-import { FLEET_DIR as fleetDir } from "../paths";
+import { FLEET_DIR as fleetDir } from "../core/paths";
 
 export const fleetApi = new Elysia();
 

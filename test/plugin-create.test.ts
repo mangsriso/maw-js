@@ -8,7 +8,7 @@ import {
   scaffoldAs,
   copyTree,
   buildManifestJson,
-} from "../src/commands/plugin-create";
+} from "../src/commands/shared/plugin-create";
 import { parseManifest } from "../src/plugin/manifest";
 
 // ─── Temp dir management ─────────────────────────────────────────────────────
@@ -319,7 +319,7 @@ describe("scaffoldRust — destination guard (via cmdPluginCreate)", () => {
     (process as any).exit = (code: number) => { exitCode = code; throw new Error("exit:" + code); };
 
     try {
-      const { cmdPluginCreate } = await import("../src/commands/plugin-create");
+      const { cmdPluginCreate } = await import("../src/commands/shared/plugin-create");
       await cmdPluginCreate("my-plugin", {
         "--rust": true,
         "--dest": existing,

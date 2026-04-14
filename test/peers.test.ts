@@ -4,7 +4,7 @@ import { mockConfigModule } from "./helpers/mock-config";
 let mockConfig: Partial<import("../src/config").MawConfig> = {};
 mock.module("../src/config", () => mockConfigModule(() => mockConfig));
 
-const { getPeers } = await import("../src/peers");
+const { getPeers } = await import("../src/core/transport/peers");
 
 describe("getPeers — merges peers[] and namedPeers[]", () => {
   beforeEach(() => {

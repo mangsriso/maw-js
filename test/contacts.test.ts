@@ -16,7 +16,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { cmdContactsAdd } from "../src/commands/contacts";
+import { cmdContactsAdd } from "../src/commands/plugins/contacts/impl";
 
 let tmp: string;
 let prevCwd: string;

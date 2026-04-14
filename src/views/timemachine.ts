@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
-import { MAW_ROOT } from "../paths";
+import { MAW_ROOT } from "../core/paths";
 
 export const timemachineView = new Hono();
 

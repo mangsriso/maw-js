@@ -6,7 +6,7 @@
  * Reserved via `maw radio`.
  */
 
-import type { Transport, TransportTarget, TransportMessage, TransportPresence } from "../transport";
+import type { Transport, TransportTarget, TransportMessage, TransportPresence } from "../core/transport/transport";
 import type { FeedEvent } from "../lib/feed";
 
 export class LoRaTransport implements Transport {

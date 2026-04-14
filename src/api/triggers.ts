@@ -1,5 +1,5 @@
 import { Elysia } from "elysia";
-import { getTriggers, getTriggerHistory, fire, type TriggerContext } from "../triggers";
+import { getTriggers, getTriggerHistory, fire, type TriggerContext } from "../core/runtime/triggers";
 import type { TriggerEvent } from "../config";
 import { TriggerFireBody, type TTriggerFireBody } from "../lib/schemas";
 

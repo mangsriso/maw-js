@@ -8,7 +8,7 @@
  * send() POSTs { jid, text } to nanoclaw's /send endpoint for delivery.
  */
 
-import type { Transport, TransportTarget, TransportMessage, TransportPresence } from "../transport";
+import type { Transport, TransportTarget, TransportMessage, TransportPresence } from "../core/transport/transport";
 import type { FeedEvent } from "../lib/feed";
 import { resolveNanoclawJid, sendViaNanoclaw } from "../bridges/nanoclaw";
 
