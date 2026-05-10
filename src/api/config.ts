@@ -41,8 +41,8 @@ configApi.get("/config-file", ({ query, set}) => {
       return { content: JSON.stringify(data, null, 2) };
     }
     return { content };
-  } catch (e: any) {
-    set.status = 500; return { error: e.message };
+  } catch (e: unknown) {
+    set.status = 500; return { error: e instanceof Error ? e.message : String(e) };
   }
 }, {
   query: t.Object({ path: t.Optional(t.String()) }),
@@ -74,8 +74,8 @@ configApi.post("/config-file", async ({ query, body, set}) => {
       writeFileSync(fullPath, content + "\n", "utf-8");
     }
     return { ok: true };
-  } catch (e: any) {
-    set.status = 400; return { error: e.message };
+  } catch (e: unknown) {
+    set.status = 400; return { error: e instanceof Error ? e.message : String(e) };
   }
 }, {
   query: t.Object({ path: t.Optional(t.String()) }),
@@ -115,9 +115,16 @@ configApi.put("/config-file", async ({ body, set}) => {
   if (!name || !name.endsWith(".json")) { set.status = 400; return { error: "name must end with .json" }; }
   const safeName = basename(name);
   const fullPath = join(fleetDir, safeName);
-  if (existsSync(fullPath)) { set.status = 409; return { error: "file already exists" }; }
   try { JSON.parse(content); } catch { set.status = 400; return { error: "invalid JSON" }; }
-  writeFileSync(fullPath, content + "\n", "utf-8");
+  // Atomic create: O_CREAT | O_EXCL. Kernel rejects on EEXIST — no TOCTOU window. (#484)
+  try {
+    writeFileSync(fullPath, content + "\n", { encoding: "utf-8", flag: "wx" });
+  } catch (e: unknown) {
+    if ((e as NodeJS.ErrnoException).code === "EEXIST") {
+      set.status = 409; return { error: "file already exists" };
+    }
+    throw e;
+  }
   return { ok: true, path: `fleet/${safeName}` };
 }, {
   body: t.Object({ name: t.String(), content: t.String() }),
@@ -132,7 +139,7 @@ configApi.get("/pin-info", () => {
 configApi.post("/pin-set", async ({ body }) => {
   const { pin } = body;
   const newPin = typeof pin === "string" ? pin.replace(/\D/g, "") : "";
-  saveConfig({ pin: newPin } as any);
+  saveConfig({ pin: newPin });
   return { ok: true, length: newPin.length, enabled: newPin.length > 0 };
 }, {
   body: t.Object({ pin: t.Optional(t.String()) }),
@@ -175,7 +182,7 @@ configApi.get("/config", ({ query }) => {
 
 configApi.post("/config", async ({ body, set}) => {
   try {
-    const data = body as any;
+    const data = body as Partial<MawConfig>;
     // If env has masked values (bullet chars), keep originals for those keys
     if (data.env && typeof data.env === "object") {
       const current = loadConfig();
@@ -187,8 +194,8 @@ configApi.post("/config", async ({ body, set}) => {
     }
     saveConfig(data);
     return { ok: true };
-  } catch (e: any) {
-    set.status = 400; return { error: e.message };
+  } catch (e: unknown) {
+    set.status = 400; return { error: e instanceof Error ? e.message : String(e) };
   }
 }, {
   body: t.Unknown(),

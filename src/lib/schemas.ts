@@ -21,6 +21,11 @@ export const Identity = Type.Object({
   agents: Type.Array(Type.String()),
   clockUtc: Type.String(),
   uptime: Type.Number(),
+  // #804 Step 1 — federation peer identity (ADR docs/federation/0001-peer-identity.md).
+  // `endpoints` lets peers discover supported API surfaces in one round-trip;
+  // `pubkey` is the per-peer identity used for TOFU pinning + future signing.
+  endpoints: Type.Array(Type.String()),
+  pubkey: Type.String(),
 });
 export type TIdentity = Static<typeof Identity>;
 
@@ -84,13 +89,83 @@ export const PluginInfo = Type.Object({
 });
 export type TPluginInfo = Static<typeof PluginInfo>;
 
+/**
+ * Scope — a named routing namespace (#642 Phase 1, primitive only).
+ *
+ * Scopes group oracles that may message each other freely. Phase 1 ships
+ * just the data primitive + CLI to create / list / show / delete; ACL
+ * evaluation, the trust list, and the cross-scope approval queue are
+ * follow-up issues. A scope file lives at:
+ *   <CONFIG_DIR>/scopes/<name>.json
+ *
+ * Fields:
+ *   - `name`     slug-safe identifier; mirrors the file name
+ *   - `members`  oracle names allowed to route within the scope
+ *   - `lead`     optional designated owner (one of `members` by convention,
+ *                but not enforced at the schema layer — operators can
+ *                experiment with shapes before Phase 2 nails it down)
+ *   - `created`  ISO-8601 timestamp at first write
+ *   - `ttl`      optional ISO date for auto-expire; null means no expiry.
+ *                Phase 1 stores it; Phase 2 enforces it.
+ */
+export const Scope = Type.Object({
+  name: Type.String(),
+  members: Type.Array(Type.String()),
+  lead: Type.Optional(Type.String()),
+  created: Type.String(),
+  ttl: Type.Union([Type.String(), Type.Null()]),
+});
+export type TScope = Static<typeof Scope>;
+
+/**
+ * Profile — a named bundle of plugins (#640 lean-core / Phase 1 of #888).
+ *
+ * Profiles let an operator pick which plugins activate without editing
+ * config-level disable lists. Phase 1 is ADDITIVE only: this schema and the
+ * accompanying loader exist alongside the current plugin loader without
+ * changing it. Phase 2 (#640 follow-up) wires the profile into the registry.
+ *
+ * A profile file lives at:
+ *   <CONFIG_DIR>/profiles/<name>.json
+ *
+ * The active profile name lives at:
+ *   <CONFIG_DIR>/profile-active   (single-line text file; "all" by default)
+ *
+ * Resolution rules (see `resolveProfilePlugins` in src/lib/profile-loader.ts):
+ *   - If `plugins` is set → use that explicit allowlist verbatim.
+ *   - If `tiers` is set → include any plugin whose `plugin.json#tier` is in
+ *     the list. Plugins without a `tier` field map to the audit doc
+ *     (docs/lean-core/plugin-audit.md) — Phase 1 falls back to "all" for
+ *     untiered plugins so the loader is conservative.
+ *   - If both fields are set → UNION (allowlist ∪ tier-filter).
+ *   - If neither field is set → empty resolution (caller should treat as "all").
+ *
+ * Fields:
+ *   - `name`     slug-safe identifier; mirrors the file name
+ *   - `plugins`  optional explicit plugin-name allowlist
+ *   - `tiers`    optional tier filter ("core" | "standard" | "extra")
+ *   - `description` optional human-readable note (Phase 1 ignores it)
+ */
+export const Profile = Type.Object({
+  name: Type.String(),
+  plugins: Type.Optional(Type.Array(Type.String())),
+  tiers: Type.Optional(Type.Array(Type.Union([
+    Type.Literal("core"),
+    Type.Literal("standard"),
+    Type.Literal("extra"),
+  ]))),
+  description: Type.Optional(Type.String()),
+});
+export type TProfile = Static<typeof Profile>;
+
 // ---------------------------------------------------------------------------
 // Request body schemas (POST endpoints)
 // ---------------------------------------------------------------------------
 
-/** POST /api/wake */
+/** POST /api/wake — accepts `target` (current) or `oracle` (legacy pre-rename) */
 export const WakeBody = Type.Object({
-  target: Type.String(),
+  target: Type.Optional(Type.String()),
+  oracle: Type.Optional(Type.String()),
   task: Type.Optional(Type.String()),
 });
 export type TWakeBody = Static<typeof WakeBody>;
@@ -101,12 +176,49 @@ export const SleepBody = Type.Object({
 });
 export type TSleepBody = Static<typeof SleepBody>;
 
+/**
+ * POST /api/probe (#804 Step 5).
+ *
+ * Real-write-path health check: exercises the same resolution code path as
+ * /api/send (resolveTarget + tmux session existence) without delivering. If
+ * `target` is omitted, the server only confirms it can run the write code
+ * path at all (process up + config readable). When `target` is supplied, the
+ * server validates it resolves and reports the transport that would be used.
+ *
+ * Why a dedicated probe (vs. reusing /api/identity)? The two endpoints take
+ * disjoint code paths — /api/identity reads package.json + peer-key and
+ * passes through near-zero handler logic, so it can answer 200 OK while
+ * /api/send is broken (the schema-drift incident on #795 was exactly this).
+ * /api/probe shares the actual write-path branches so a "green" probe means
+ * the receiver can deliver, not just that its HTTP server is alive.
+ */
+export const ProbeBody = Type.Object({
+  target: Type.Optional(Type.String()),
+});
+export type TProbeBody = Static<typeof ProbeBody>;
+
 /** POST /api/send */
 export const SendBody = Type.Object({
   target: Type.String(),
   text: Type.String(),
+  force: Type.Optional(Type.Boolean()),
+  attachments: Type.Optional(Type.Array(Type.String())),
 });
 export type TSendBody = Static<typeof SendBody>;
+
+/**
+ * POST /api/pane-keys (#757)
+ *
+ * Raw tmux send-keys to any pane (bash, claude, anything). No paste-mode,
+ * no readiness guard. Used by `maw send` (enter=false) and `maw run`
+ * (enter=true) for cross-node pane control.
+ */
+export const PaneKeysBody = Type.Object({
+  target: Type.String(),
+  text: Type.String(),
+  enter: Type.Optional(Type.Boolean()),
+});
+export type TPaneKeysBody = Static<typeof PaneKeysBody>;
 
 /** POST /api/config-file (save) */
 export const ConfigFileBody = Type.Object({

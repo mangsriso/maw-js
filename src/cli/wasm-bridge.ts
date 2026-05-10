@@ -19,6 +19,7 @@
  */
 
 import { maw } from "../core/runtime/sdk";
+import { trySilentAsync } from "../core/util/try-silent";
 
 // ---------------------------------------------------------------------------
 // Text codec singletons
@@ -184,12 +185,12 @@ export function buildImportObject(
  * maw_identity() and maw_federation() return real data.
  */
 export async function preCacheBridge(bridge: WasmBridge): Promise<void> {
-  try {
+  await trySilentAsync(async () => {
     const [id, fed] = await Promise.all([
       maw.identity().catch(() => ({ error: "unreachable" })),
       maw.federation().catch(() => ({ error: "unreachable" })),
     ]);
     bridge._setCachedIdentity(JSON.stringify(id));
     bridge._setCachedFederation(JSON.stringify(fed));
-  } catch { /* best-effort */ }
+  });
 }

@@ -18,14 +18,22 @@ export class PluginSystem {
   private _gated = 0;
   private _startedAt = new Date().toISOString();
   private _currentScope: PluginScope = "user";
+  private _currentPluginName?: string;
   private _reloads = 0;
   private _lastReloadAt?: string;
 
   private _addTo<T>(map: Map<string, Scoped<T>[]>, event: string, fn: T) {
-    const entry: Scoped<T> = { fn, scope: this._currentScope };
+    const entry: Scoped<T> = { fn, scope: this._currentScope, name: this._currentPluginName };
     const list = map.get(event);
     if (list) list.push(entry);
     else map.set(event, [entry]);
+  }
+
+  private _recordError(name: string | undefined, err: Error) {
+    this._totalErrors++;
+    if (!name) return;
+    const info = this._plugins.find((p) => p.name === name);
+    if (info) { info.errors++; info.lastError = err.message; }
   }
 
   readonly hooks: MawHooks = {
@@ -40,41 +48,48 @@ export class PluginSystem {
     const frozen = Object.freeze({ ...event });
 
     // Phase 0: GATE
-    for (const { fn } of [...(this.gates.get(event.event) ?? []), ...(this.gates.get("*") ?? [])]) {
+    for (const { fn, name } of [...(this.gates.get(event.event) ?? []), ...(this.gates.get("*") ?? [])]) {
       try { if (fn(frozen) === false) { this._gated++; return false; } }
-      catch (err) { this._totalErrors++; console.error(`[plugin:gate] ${event.event}:`, (err as Error).message); }
+      catch (err) { console.error(`[plugin:gate] ${event.event}:`, (err as Error).message); this._recordError(name, err as Error); }
     }
 
     // Phase 1: FILTER
-    for (const { fn } of [...(this.filters.get(event.event) ?? []), ...(this.filters.get("*") ?? [])]) {
+    // Policy: on throw, continue the chain with the previous event (don't bail on one bad filter).
+    // `event = fn(event)` only reassigns on successful return, so a throw leaves `event` unmodified —
+    // we make that explicit here by attributing the error and moving on. Alternative would be to throw
+    // and stop the chain; chosen continuation for resilience (one misbehaving filter shouldn't blind
+    // downstream handlers to all events).
+    for (const { fn, name } of [...(this.filters.get(event.event) ?? []), ...(this.filters.get("*") ?? [])]) {
       try { event = fn(event); }
-      catch (err) { this._totalErrors++; console.error(`[plugin:filter] ${event.event}:`, (err as Error).message); }
+      catch (err) { console.error(`[plugin:filter] ${event.event}:`, (err as Error).message); this._recordError(name, err as Error); }
     }
 
     // Phase 2: HANDLE
     const readOnly = Object.freeze({ ...event });
-    for (const { fn } of [...(this.handlers.get(event.event) ?? []), ...(this.handlers.get("*") ?? [])]) {
+    for (const { fn, name } of [...(this.handlers.get(event.event) ?? []), ...(this.handlers.get("*") ?? [])]) {
       try { await fn(readOnly); }
-      catch (err) { this._totalErrors++; console.error(`[plugin] ${event.event}:`, (err as Error).message); }
+      catch (err) { console.error(`[plugin] ${event.event}:`, (err as Error).message); this._recordError(name, err as Error); }
     }
 
     // Phase 3: LATE
-    for (const { fn } of [...(this.lates.get(event.event) ?? []), ...(this.lates.get("*") ?? [])]) {
+    for (const { fn, name } of [...(this.lates.get(event.event) ?? []), ...(this.lates.get("*") ?? [])]) {
       try { fn(readOnly); }
-      catch (err) { this._totalErrors++; console.error(`[plugin:late] ${event.event}:`, (err as Error).message); }
+      catch (err) { console.error(`[plugin:late] ${event.event}:`, (err as Error).message); this._recordError(name, err as Error); }
     }
 
     for (const p of this._plugins) { p.events = this._totalEvents; p.lastEvent = event.event; }
     return true;
   }
 
-  load(plugin: MawPlugin, scope: PluginScope = "user") {
-    const prev = this._currentScope;
+  load(plugin: MawPlugin, scope: PluginScope = "user", name?: string) {
+    const prevScope = this._currentScope;
+    const prevName = this._currentPluginName;
     this._currentScope = scope;
+    this._currentPluginName = name;
     try {
       const teardown = plugin(this.hooks);
       if (typeof teardown === "function") this.teardowns.push({ fn: teardown, scope });
-    } finally { this._currentScope = prev; }
+    } finally { this._currentScope = prevScope; this._currentPluginName = prevName; }
   }
 
   register(name: string, type: PluginInfo["type"], source: PluginScope = "user") {

@@ -28,13 +28,21 @@ export type { MawConfig } from "../config";
 
 // ─── Transport ───────────────────────────────────────────────────────────────
 
-export { tmux, Tmux, tmuxCmd, resolveSocket } from "../core/transport/tmux";
-export type { TmuxPane, TmuxWindow, TmuxSession } from "../core/transport/tmux";
+export {
+  tmux, Tmux, tmuxCmd, resolveSocket,
+  withPaneLock, splitWindowLocked, tagPane, readPaneTags,
+} from "../core/transport/tmux";
+export type {
+  TmuxPane, TmuxWindow, TmuxSession,
+  SplitWindowLockedOpts, TagPaneOpts, PaneTags,
+} from "../core/transport/tmux";
 export {
   hostExec, listSessions, capture, sendKeys,
   getPaneCommand, getPaneCommands, getPaneInfos,
+  isAgentCommand,
+  HostExecError,
 } from "../core/transport/ssh";
-export type { Session as SshSession } from "../core/transport/ssh";
+export type { Session as SshSession, HostExecTransport } from "../core/transport/ssh";
 export { curlFetch } from "../core/transport/curl-fetch";
 export {
   getPeers, getFederationStatus, findPeerForTarget,
@@ -61,6 +69,14 @@ export {
   readCache, isCacheStale,
 } from "../core/fleet/oracle-registry";
 export type { OracleEntry, RegistryCache } from "../core/fleet/oracle-registry";
+// Sub-issue 2 of #736 Phase 2 / #836 — unified read-only view across the 5
+// oracle registries. Consumer-side rollouts (oracle ls, doctor, resolveTarget)
+// land in follow-up PRs.
+export {
+  loadManifest, findOracle, loadManifestCached, invalidateManifest,
+  DEFAULT_TTL_MS as ORACLE_MANIFEST_DEFAULT_TTL_MS,
+} from "../lib/oracle-manifest";
+export type { OracleManifestEntry, OracleManifestSource } from "../lib/oracle-manifest";
 
 // ─── Artifacts ───────────────────────────────────────────────────────────────
 
@@ -84,6 +100,33 @@ export { registerCommand, matchCommand, listCommands } from "../cli/command-regi
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 export { parseFlags } from "../cli/parse-args";
+
+// ─── Transport Router ────────────────────────────────────────────────────────
+
+export {
+  createTransportRouter, getTransportRouter, resetTransportRouter,
+} from "../transports";
+export { TransportRouter, classifyError } from "../core/transport/transport";
+export type {
+  Transport, TransportTarget, TransportMessage, TransportPresence,
+  TransportResult, TransportFailureReason,
+} from "../core/transport/transport";
+
+// ─── Bud — moved to community plugin (registry: maw-bud) ────────────────────
+// SDK no longer re-exports bud internals; community plugins consume @maw-js/sdk
+// rather than being part of it. Imports are now: registry install + plugin runtime.
+
+// ─── Oracle management ───────────────────────────────────────────────────────
+
+export {
+  cmdOracleAbout,
+  cmdOracleList,
+  cmdOracleScan,
+  cmdOracleFleet,
+  cmdOracleScanStale,
+  cmdOraclePrune,
+  cmdOracleRegister,
+} from "../commands/plugins/oracle/impl";
 
 // ─── definePlugin — the plugin contract ──────────────────────────────────────
 
@@ -114,7 +157,7 @@ export interface PluginConfig {
  * the shape, provides autocomplete, zero runtime overhead.
  *
  * ```ts
- * import { definePlugin } from "maw/sdk";
+ * import { definePlugin } from "@maw-js/sdk";
  *
  * export default definePlugin({
  *   name: "my-plugin",

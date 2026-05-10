@@ -1,19 +1,42 @@
 import { loadConfig } from "../../config";
-import { tmuxCmd } from "./tmux";
+import { tmuxCmd, Tmux } from "./tmux";
 
 const DEFAULT_HOST = process.env.MAW_HOST || loadConfig().host || "local";
+// #713: with bind/host split, config.host is never a bind address (0.0.0.0 etc.)
 const IS_LOCAL = DEFAULT_HOST === "local" || DEFAULT_HOST === "localhost";
+
+export type HostExecTransport = "local" | "ssh";
+
+/** Error from hostExec — carries target + transport so callers can format. */
+export class HostExecError extends Error {
+  readonly target: string;
+  readonly transport: HostExecTransport;
+  readonly underlying: Error;
+  readonly exitCode?: number;
+
+  constructor(target: string, transport: HostExecTransport, underlying: Error, exitCode?: number) {
+    super(`[${transport}:${target}] ${underlying.message}`);
+    this.name = "HostExecError";
+    this.target = target;
+    this.transport = transport;
+    this.underlying = underlying;
+    this.exitCode = exitCode;
+  }
+}
 
 /** Transport — run on oracle host. local → bash -c | remote → ssh */
 export async function hostExec(cmd: string, host = DEFAULT_HOST): Promise<string> {
+  // #713: with bind/host split, host is never a bind address (0.0.0.0 etc.)
   const local = host === "local" || host === "localhost" || IS_LOCAL;
+  const transport: HostExecTransport = local ? "local" : "ssh";
   const args = local ? ["bash", "-c", cmd] : ["ssh", host, cmd];
   const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe", windowsHide: true });
   const text = await new Response(proc.stdout).text();
   const code = await proc.exited;
   if (code !== 0) {
     const err = await new Response(proc.stderr).text();
-    throw new Error(err.trim() || `exit ${code}`);
+    const underlying = new Error(err.trim() || `exit ${code}`);
+    throw new HostExecError(host, transport, underlying, code);
   }
   return text.trim();
 }
@@ -29,40 +52,18 @@ export const ssh = hostExec;
 import type { Session } from "../runtime/find-window";
 
 export async function listSessions(host?: string): Promise<Session[]> {
-  let raw: string;
-  try { raw = await hostExec(`${tmuxCmd()} list-sessions -F '#{session_name}' 2>/dev/null`, host); }
-  catch { return []; }
-  const sessions: Session[] = [];
-  for (const s of raw.split("\n").filter(Boolean)) {
-    try {
-      const winRaw = await hostExec(
-        `${tmuxCmd()} list-windows -t '${s}' -F '#{window_index}:#{window_name}:#{window_active}' 2>/dev/null`,
-        host,
-      );
-      const windows = winRaw.split("\n").filter(Boolean).map(w => {
-        const [idx, name, active] = w.split(":");
-        return { index: +idx, name, active: active === "1" };
-      });
-      sessions.push({ name: s, windows });
-    } catch {
-      // Session may have died between list-sessions and list-windows
-      sessions.push({ name: s, windows: [] });
-    }
-  }
-  return sessions;
+  const t = new Tmux(host);
+  return t.listSessions();
 }
 
 export async function capture(target: string, lines = 80, host?: string): Promise<string> {
-  // -e preserves ANSI escape sequences (colors), -S captures scroll-back
-  if (lines > 50) {
-    // Grab full visible pane + some scrollback
-    return hostExec(`${tmuxCmd()} capture-pane -t '${target}' -e -p -S -${lines} 2>/dev/null`, host);
-  }
-  return hostExec(`${tmuxCmd()} capture-pane -t '${target}' -e -p 2>/dev/null | tail -${lines}`, host);
+  const t = new Tmux(host);
+  return t.capture(target, lines);
 }
 
 export async function selectWindow(target: string, host?: string): Promise<void> {
-  await hostExec(`${tmuxCmd()} select-window -t '${target}' 2>/dev/null`, host);
+  const t = new Tmux(host);
+  await t.selectWindow(target);
 }
 
 export async function switchClient(session: string, host?: string): Promise<void> {
@@ -76,6 +77,25 @@ export async function getPaneCommand(target: string, host?: string): Promise<str
   const { Tmux } = await import("./tmux");
   const t = new Tmux(host);
   return t.getPaneCommand(target);
+}
+
+/** Pane command looks like an AI agent — name match (claude/codex/node),
+ *  Claude Code 2.1+ versioned-binary signature (e.g. "2.1.121"), or any
+ *  binary from config.commands entries. */
+export function isAgentCommand(cmd: string | null | undefined): boolean {
+  const c = (cmd ?? "").trim();
+  if (!c) return false;
+  if (/claude|codex|node/i.test(c)) return true;
+  if (/^\d+\.\d+\.\d+$/.test(c)) return true;
+  try {
+    const { loadConfig } = require("../../config");
+    const commands: Record<string, string> = loadConfig().commands || {};
+    for (const v of Object.values(commands)) {
+      const bin = v.split(/\s/)[0];
+      if (bin && bin !== "default" && c.toLowerCase().includes(bin.toLowerCase())) return true;
+    }
+  } catch {}
+  return false;
 }
 
 /** Batch-check which panes are running what command. */

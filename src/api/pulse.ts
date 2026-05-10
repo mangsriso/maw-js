@@ -13,6 +13,24 @@ import { Elysia, t} from "elysia";
 import { hostExec } from "../core/transport/ssh";
 import { loadConfig, type MawConfig } from "../config";
 
+const LABEL_RE = /^[a-zA-Z0-9_:/.\- ]+$/;
+function assertLabels(labels: string[]): void {
+  for (const l of labels) {
+    if (!LABEL_RE.test(l)) throw new Error(`Invalid label: ${JSON.stringify(l)}`);
+  }
+}
+
+async function ghSpawn(args: string[]): Promise<string> {
+  const proc = Bun.spawn(["gh", ...args], { stdout: "pipe", stderr: "pipe" });
+  const [out, err, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  if (code !== 0) throw new Error(err.trim() || `gh exited ${code}`);
+  return out;
+}
+
 export const pulseApi = new Elysia();
 
 function getPulseRepo(): string {
@@ -45,12 +63,13 @@ pulseApi.post("/pulse", async ({ body, set}) => {
   const { title, body: issueBody, labels, oracle } = body;
   if (!title) { set.status = 400; return { error: "title required" }; }
   const repo = getPulseRepo();
-  const labelFlags = labels?.length ? `-l "${labels.join(",")}"` : "";
-  const oracleLabel = oracle ? `-l "oracle:${oracle}"` : "";
   try {
-    const url = await hostExec(
-      `gh issue create --repo ${repo} -t '${title.replace(/'/g, "'\\''")}' -b '${(issueBody || "").replace(/'/g, "'\\''")}' ${labelFlags} ${oracleLabel}`
-    );
+    const allLabels = [...(labels || [])];
+    if (oracle) allLabels.push(`oracle:${oracle}`);
+    assertLabels(allLabels);
+    const args = ["issue", "create", "--repo", repo, "-t", title, "-b", issueBody || ""];
+    for (const l of allLabels) args.push("-l", l);
+    const url = await ghSpawn(args);
     return { ok: true, url: url.trim() };
   } catch (e: any) {
     set.status = 500; return { error: e.message };
@@ -68,14 +87,20 @@ pulseApi.patch("/pulse/:id", async ({ params, body, set}) => {
   const id = params.id;
   const { addLabels, removeLabels, state } = body;
   const repo = getPulseRepo();
-  const cmds: string[] = [];
-  if (addLabels?.length) cmds.push(`gh issue edit ${id} --repo ${repo} --add-label "${addLabels.join(",")}"`);
-  if (removeLabels?.length) cmds.push(`gh issue edit ${id} --repo ${repo} --remove-label "${removeLabels.join(",")}"`);
-  if (state === "closed") cmds.push(`gh issue close ${id} --repo ${repo}`);
-  if (state === "open") cmds.push(`gh issue reopen ${id} --repo ${repo}`);
-  if (!cmds.length) { set.status = 400; return { error: "nothing to update" }; }
   try {
-    for (const cmd of cmds) await hostExec(cmd);
+    const ops: Array<() => Promise<string>> = [];
+    if (addLabels?.length) {
+      assertLabels(addLabels);
+      ops.push(() => ghSpawn(["issue", "edit", id, "--repo", repo, "--add-label", addLabels.join(",")]));
+    }
+    if (removeLabels?.length) {
+      assertLabels(removeLabels);
+      ops.push(() => ghSpawn(["issue", "edit", id, "--repo", repo, "--remove-label", removeLabels.join(",")]));
+    }
+    if (state === "closed") ops.push(() => ghSpawn(["issue", "close", id, "--repo", repo]));
+    if (state === "open") ops.push(() => ghSpawn(["issue", "reopen", id, "--repo", repo]));
+    if (!ops.length) { set.status = 400; return { error: "nothing to update" }; }
+    for (const op of ops) await op();
     return { ok: true, id };
   } catch (e: any) {
     set.status = 500; return { error: e.message };

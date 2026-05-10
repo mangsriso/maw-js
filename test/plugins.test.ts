@@ -510,4 +510,82 @@ describe("PluginSystem", () => {
     sys.unloadScope("user");
     expect(sys.stats().handlers).toEqual({});
   });
+
+  // ─── PluginInfo.errors attribution (issue #386) ───
+
+  test("filter throw increments PluginInfo.errors for the offending plugin only", async () => {
+    const sys = new PluginSystem();
+    const received: string[] = [];
+
+    sys.register("bad.ts", "ts", "user");
+    sys.load((hooks) => {
+      hooks.filter("*", () => { throw new Error("filter boom"); });
+    }, "user", "bad.ts");
+
+    sys.register("good.ts", "ts", "user");
+    sys.load((hooks) => {
+      hooks.on("SessionStart", (e) => received.push(e.oracle));
+    }, "user", "good.ts");
+
+    await sys.emit(mockEvent);
+
+    // Chain continued: downstream handler still ran with the (unmodified) event
+    expect(received).toEqual(["neo"]);
+
+    const infos = sys.stats().plugins;
+    const bad = infos.find((p) => p.name === "bad.ts");
+    const good = infos.find((p) => p.name === "good.ts");
+    expect(bad?.errors).toBe(1);
+    expect(bad?.lastError).toBe("filter boom");
+    expect(good?.errors).toBe(0);
+    expect(sys.stats().totalErrors).toBe(1);
+  });
+
+  test("filter throw leaves event unmodified for downstream handlers", async () => {
+    const sys = new PluginSystem();
+    const seen: string[] = [];
+
+    sys.register("throwing-filter.ts", "ts", "user");
+    sys.load((hooks) => {
+      hooks.filter("*", () => { throw new Error("no mutation"); });
+    }, "user", "throwing-filter.ts");
+
+    sys.load((hooks) => {
+      hooks.on("*", (e) => seen.push(e.message));
+    });
+
+    await sys.emit(mockEvent);
+    // Event falls through untouched, not some half-mutated state
+    expect(seen).toEqual(["Session started"]);
+  });
+
+  test("errors from gate/handle/late also attribute to the plugin", async () => {
+    const sys = new PluginSystem();
+
+    sys.register("noisy.ts", "ts", "user");
+    sys.load((hooks) => {
+      hooks.gate("SessionStart", () => { throw new Error("g"); });
+      hooks.on("SessionStart", () => { throw new Error("h"); });
+      hooks.late("SessionStart", () => { throw new Error("l"); });
+    }, "user", "noisy.ts");
+
+    await sys.emit(mockEvent);
+
+    const info = sys.stats().plugins.find((p) => p.name === "noisy.ts");
+    expect(info?.errors).toBe(3);
+    expect(sys.stats().totalErrors).toBe(3);
+  });
+
+  test("errors from unregistered loads still bump totalErrors without crashing", async () => {
+    const sys = new PluginSystem();
+    // Load without a name — common for inline/anonymous plugins
+    sys.load((hooks) => {
+      hooks.filter("*", () => { throw new Error("anon"); });
+    });
+
+    await sys.emit(mockEvent);
+    expect(sys.stats().totalErrors).toBe(1);
+    // No PluginInfo to attribute to — array stays empty
+    expect(sys.stats().plugins).toEqual([]);
+  });
 });

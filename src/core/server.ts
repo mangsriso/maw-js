@@ -36,6 +36,10 @@ function getVersionString(): string {
 
 export const VERSION = getVersionString();
 
+// Bind heuristic lives in ./bind-host.ts so tests can import it without
+// pulling in server.ts's module-level auto-start side effects.
+import { resolveBindHost } from "./bind-host";
+
 // --- Views + static (Hono keeps these) ---
 
 const views = new Hono();
@@ -58,7 +62,14 @@ if (existsSync(MAW_UI_DIR)) {
 } else {
   // The Door — minimal landing page when no packed maw-ui is installed.
   // Lets users connect to any federation by pasting an address.
-  const doorHtml = readFileSync(join(import.meta.dir, "static", "door.html"), "utf-8");
+  let doorHtml: string;
+  try {
+    doorHtml = readFileSync(join(import.meta.dir, "static", "door.html"), "utf-8");
+  } catch {
+    // door.html missing (e.g. fresh clone without assets) — serve inline stub
+    process.stderr.write("→ maw-ui not found. Run `maw ui build` or install maw-ui.\n");
+    doorHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>maw</title></head><body style="font-family:monospace;background:#0d0d0d;color:#ccc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0"><div style="text-align:center"><h1 style="color:#fff">maw</h1><p>maw-ui not installed. Run <code style="color:#7dd3fc">maw ui build</code> or install maw-ui.</p></div></body></html>`;
+  }
   views.get("/", (c) => c.html(doorHtml));
 }
 
@@ -176,10 +187,15 @@ export async function startServer(port = +(process.env.MAW_PORT || loadConfig().
   };
 
   // HTTP server (always)
-  // Security: bind to localhost unless peers are configured (federation needs network access)
+  // Security: bind to localhost unless federation is active (see resolveBindHost).
+  // #713: config.bind takes precedence over the heuristic — it's the explicit
+  // "I want to listen on this address" knob, separate from config.host (the
+  // outbound connection target).
   const config = loadConfig();
-  const hasPeers = (config.peers?.length ?? 0) > 0 || (config.namedPeers?.length ?? 0) > 0;
-  const hostname = hasPeers ? "0.0.0.0" : "127.0.0.1";
+  const heuristic = resolveBindHost(config);
+  const hostname = config.bind ?? heuristic.hostname;
+  const reason = config.bind ? "config.bind" as const : heuristic.reason;
+  const hasPeers = heuristic.reason !== null;
 
   if (hasPeers && !config.federationToken) {
     console.warn(`\x1b[31m⚠ WARNING: peers configured but no federationToken set!\x1b[0m`);
@@ -187,9 +203,25 @@ export async function startServer(port = +(process.env.MAW_PORT || loadConfig().
     console.warn(`\x1b[31m  Add "federationToken" (min 16 chars) to maw.config.json\x1b[0m`);
   }
 
+  // Duplicate <oracle>:<node> warn (#804 Step 3, ADR docs/federation/0001-peer-identity.md).
+  // Boot-time scan of the peer cache + the local identity. Non-blocking — per
+  // the ADR, "Crypto solves can't-fake; doctor + boot-time check solves
+  // operator confusion" — so we just warn loudly and let serve continue.
+  try {
+    const { loadPeers } = require("../lib/peers/store");
+    const { warnDuplicatesAtBoot } = require("../lib/peers/duplicate-detect");
+    const peers = loadPeers().peers;
+    const local = config.node ? { oracle: config.oracle ?? "mawjs", node: config.node } : undefined;
+    warnDuplicatesAtBoot({ peers, local });
+  } catch (e: any) {
+    // Never fail boot on a dedup-scan glitch — log and move on.
+    console.warn(`[startup] peer dedup scan skipped: ${e?.message || e}`);
+  }
+
   const server = Bun.serve({ port, hostname, fetch: fetchHandler, websocket: wsHandler });
   setBunServer(server);
-  console.log(`maw ${VERSION} serve → ${HTTP_URL} (${WS_URL}) [${hostname}]`);
+  const bindNote = reason ? ` (${reason})` : "";
+  console.log(`maw ${VERSION} serve → ${HTTP_URL} (${WS_URL}) [${hostname}]${bindNote}`);
 
   // HTTPS server (if TLS configured)
   const tlsCfg = loadConfig().tls;

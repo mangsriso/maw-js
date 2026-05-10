@@ -1,0 +1,211 @@
+# Contributing to maw-js
+
+Thanks for taking an interest. This project is alpha — the surface moves fast and breaking changes land frequently. Expect churn; expect warmth.
+
+## Quick start
+
+```bash
+bun install
+bun run test:all    # ~2-3 min; runs unit, isolated, mock-smoke, plugin suites
+bun run maw --help
+```
+
+Bun v1.3+ is required. tmux is needed for multi-agent features. On Linux, `ssh` must be on PATH for federation.
+
+## Before opening a PR
+
+1. **Run `bun run preflight`** — local-build-first sanity check (~10s). Builds `dist/maw` and smoke-tests the actual binary. Catches the obvious failures before you pay the GitHub Actions tax. See [docs/process/local-build-first.md](./docs/process/local-build-first.md) — and read it once for the bundle-grep false-positive trap that birthed the script ([#911](https://github.com/Soul-Brews-Studio/maw-js/issues/911)).
+2. `bun run test:all` passes locally.
+3. New code has tests. If the code path is integration-only (spawns a subprocess, sets a timer, listens for a signal), document why in the test file.
+4. New `mock.module(...)` calls live in `test/isolated/` or `test/helpers/` (see `scripts/check-mock-boundary.sh`).
+5. If you added a new export to `src/core/transport/ssh.ts` or `src/config/*`, update the canonical mock in `test/helpers/mock-*.ts` (see `scripts/check-mock-export-sync.sh`).
+6. **Run `bun run check:redos`** — pre-flight ReDoS scan that catches the most common polynomial-backtracking shapes before CI's CodeQL job does. See [ReDoS pre-flight](#redos-pre-flight) below.
+7. Commits follow [Conventional Commits](https://www.conventionalcommits.org/) — `feat:`, `fix:`, `chore:`, `test:`, `docs:`.
+
+> **Don't trust grep on minified Bun bundles.** `bun build --minify` renames identifiers and dead-strips strings, so `strings dist/maw | grep <symbol>` is a false-negative trap. Run the binary instead — that's what `bun run preflight` does. See [docs/process/local-build-first.md](./docs/process/local-build-first.md).
+
+## ReDoS pre-flight
+
+`scripts/check-redos.ts` is a lightweight rules-based scanner that catches the regex shapes most likely to trip GitHub CodeQL's `js/polynomial-redos` alert. It's not a CodeQL replacement — CodeQL still runs in CI and is the authoritative gate. This script just shaves the ~5 min CI round-trip when a fixable ReDoS slips into a PR.
+
+Run it manually:
+
+```bash
+bun run check:redos                    # scan all of src/
+bun scripts/check-redos.ts <files>...  # scan specific files (hook-friendly)
+```
+
+It exits **non-zero** when it finds a high-severity match. Patterns:
+
+| Rule | Shape | Severity | Fix |
+|---|---|---|---|
+| **A** | `/[chars]+$/` (positive char class, `+`/`*`, anchored to `$` only — no `^`) | high | Anchor with `^...$`, or prefix `(?<![chars])` look-behind. |
+| **B** | `/(a\|b\|c)[+*]/` (alternation with unbounded quantifier, no `^` anchor) | high | Factor the alternation out, or use atomic groups. |
+| **D** | `/(.+)+/` (nested unbounded quantifiers) | high | Collapse — `(.+)+` ≡ `.+`. |
+| **C** | `new RegExp(<dynamic>)` (concat / template literal) | info | Verify the source is regex-quoted. |
+
+### Escape hatch — `// CODEQL_OK`
+
+If you've verified a flagged regex is genuinely safe (small bounded input, etc.), append `// CODEQL_OK: <reason>` to the line. The detector will skip it.
+
+```ts
+.replace(/[-.]+$/, "")  // CODEQL_OK: input length-capped to 50, no backtracking risk
+```
+
+Use sparingly — every escape is something CI's CodeQL might still flag.
+
+### When to use the CodeQL CLI
+
+For deeper analysis (data-flow, taint tracking), run the full CodeQL CLI locally — `gh codeql database create && gh codeql analyze`. Reserve this for security-sensitive PRs; the lightweight scanner is enough for day-to-day work.
+
+## PR size
+
+Soft cap: **~300 LOC of production code per PR** (Google research pegs review quality dropping past ~400; 300 leaves headroom).
+
+The cap counts: files under `src/`, `scripts/`, and non-generated config.
+The cap does **not** count: test files, fixtures under `test/fixtures/`, generated code (`dist/`, lockfiles), or vendored deps.
+
+If you exceed the cap:
+
+1. Consider splitting (scaffold → logic → integration, or per-file).
+2. If splitting costs more than reviewing big, say so in the PR body and flag which chunks reviewers can skim vs read line-by-line.
+3. Day-per-PR scaffolds (like ADR-002 Day 1 of 4) are fine — the *split itself* is the cap-honoring move.
+
+Tests don't count toward the cap, but flag if tests are >50% of total diff so reviewers know what kind of PR they're reading.
+
+### Per-file size
+
+Within the PR cap, individual source files should target **150-200 LOC**. > 200 is a smell — split by responsibility (e.g., `parser.ts` + `validator.ts` instead of one `parse.ts`).
+
+This is for NEW files. Existing oversized files aren't a forced refactor; just stay under 200 for any NEW additions and flag refactor opportunities in the PR body.
+
+Exempt: type-definition files, specs/docs, generated/scaffolded boilerplate.
+
+## Opening issues
+
+- **Bugs**: include the command you ran, the output you got, and what you expected. A minimal repro beats a long narrative.
+- **Features**: open a short issue describing the problem first. If we align on the shape, a PR is welcome.
+- **Proposals / design docs**: use GitHub Discussions, not issues. Issues are for work; discussions are for thought.
+
+## Branch model
+
+- **`main`** — stable releases only. No alpha tags, no in-progress work. Every commit is a cut version that someone could install today.
+- **`alpha`** — active development. All feature/bugfix PRs target this branch. Alpha versions accumulate here.
+
+PRs to `main` come from one source: `alpha` itself, on a stable cut.
+
+## Versioning
+
+**maw-js uses CalVer as of 2026-04-18.**
+
+Scheme: `v{yy}.{m}.{d}[-alpha.{HMM}]` — e.g. `v26.4.18` (stable) or `v26.4.18-alpha.937` (alpha cut at 09:37). The HMM suffix is the integer `H*100 + M` rendered with no leading zeros (09:37 → 937, 10:01 → 1001, 23:59 → 2359). Each minute is a unique slot. Spec lives in [umbrella #526](https://github.com/Soul-Brews-Studio/maw-js/issues/526) and the [CHANGELOG](./CHANGELOG.md#versioning--calver-since-2026-04-18). HMM replaced the prior monotonic counter in [#923](https://github.com/Soul-Brews-Studio/maw-js/pull/923); see [#766](https://github.com/Soul-Brews-Studio/maw-js/issues/766) for the original counter design.
+
+## Releasing
+
+The day-to-day flow — alphas accumulate on `alpha`, stable cuts roll up to `main`:
+
+1. **Branch from `alpha`.** Name the branch `fix/<issue>-<slug>` or `feat/<issue>-<slug>`.
+   ```bash
+   git fetch origin
+   git checkout -B alpha origin/alpha
+   git checkout -b fix/123-my-bugfix
+   ```
+2. **Open the PR with base `alpha`** (NOT `main`).
+   ```bash
+   gh pr create --base alpha --title "fix: ..."
+   ```
+3. **`/calver --apply` runs on `alpha` only.** Alpha versions accumulate on `alpha`; `main` never receives an alpha bump directly. If you find yourself bumping CalVer on `main`, stop — you're on the wrong branch.
+4. **Cut stable when ready** by opening a PR from `alpha` into `main`:
+   ```bash
+   gh pr create --base main --head alpha --title "release: vYY.M.D"
+   ```
+5. **Merge the stable PR.** Squash-merge or fast-forward, depending on the cut's history. The `.github/workflows/calver-release.yml` workflow auto-tags `v<version>`, cuts a GitHub Release, and attaches the `dist/maw` artifact.
+
+### When to cut stable
+
+Cutting stable is a **discrete decision, not automatic**. Common triggers:
+
+- A coherent batch of fixes/features has settled on `alpha` and tests are green.
+- A user-visible milestone wants a clean version pointer.
+- Time has passed and `alpha` is materially ahead of `main`.
+
+There is no fixed cadence. If `alpha` is quiet, don't cut. If `alpha` has shipped real value, cut.
+
+### Cut commands
+
+```bash
+TZ=Asia/Bangkok bun scripts/calver.ts            # alpha bump (run on `alpha` branch)
+TZ=Asia/Bangkok bun scripts/calver.ts --stable   # stable bump (run on `alpha`, then PR to `main`)
+TZ=Asia/Bangkok bun scripts/calver.ts --check    # dry-run, no writes
+```
+
+Or via the npm-script alias: `bun run calver [--stable|--check]` (TZ still recommended).
+
+`--hour` was removed in #923 — HMM is now computed from wall-clock automatically.
+
+### Do NOT manually bump semver
+
+- Don't hand-edit `package.json` `version`. Always go through `scripts/calver.ts`.
+- Old semver tags (`v2.0.0-alpha.117` → `v2.0.0-alpha.137`) remain readable for history but no new semver tags should be cut.
+- The legacy `bun run ship:alpha` (`scripts/ship-alpha.sh`) still exists for emergency use during transition. It now prints a banner directing you to CalVer — please follow it.
+
+## Releases (legacy — pre-2026-04-18)
+
+Pre-CalVer alphas shipped from `main` via `bun run ship:alpha`. See `scripts/ship-alpha.sh`. Kept for historical reference; prefer the CalVer flow above.
+
+## Adding a plugin
+
+`maw-js` ships plugins in three tiers. Tier is declared in each plugin's `plugin.json` and decides whether the plugin loads on every install, on most installs, or only when an operator opts in. The full philosophy lives in [docs/lean-core/0001-plugin-tier-philosophy.md](./docs/lean-core/0001-plugin-tier-philosophy.md); the short version follows.
+
+### Pick a tier
+
+```
+Does every install need this plugin?
+├── Yes → tier: "core"
+└── No → Does most installs benefit?
+    ├── Yes → tier: "standard"
+    └── No → tier: "extra" (consider extracting to a community repo)
+```
+
+- **`core`** — federation primitives, the plugin manager, identity, config, dispatch. Stays in the binary forever.
+- **`standard`** — the canonical send-loop (`send`, `run`), lifecycle (`wake`, `sleep`), federation read (`peek`, `view`), health (`doctor`). Ships in the default profile.
+- **`extra`** — workflow-specific plugins (fleet, oracle, team, costs, etc.). Opt-in via profile; eventually extracted to a community repo via the marketplace registry ([#874](https://github.com/Soul-Brews-Studio/maw-js/issues/874)).
+
+When in doubt: **`standard`**. It is the conservative choice — most operators get the plugin, no one is forced to load it.
+
+### Declare tier in `plugin.json`
+
+```jsonc
+{
+  "name": "my-plugin",
+  "tier": "extra",
+  // ... rest of manifest
+}
+```
+
+The `tier` field is optional for backwards compatibility — plugins shipped before [ADR 0001](./docs/lean-core/0001-plugin-tier-philosophy.md) have no tier and the loader treats them as `core` by default. **New plugins must declare `tier` explicitly.**
+
+### Where the tier is read
+
+- `src/lib/profile-loader.ts` ([#889](https://github.com/Soul-Brews-Studio/maw-js/pull/889)) — resolves the active profile (a name → set of plugins or set of tiers).
+- `src/plugin/registry.ts` ([#891](https://github.com/Soul-Brews-Studio/maw-js/pull/891)) — applies the active-profile filter in `discoverPackages()`. Plugins outside the resolved set never reach the command surface.
+
+You don't need to wire anything yourself — declaring `tier` is enough.
+
+### Considering extra? Consider extracting
+
+If your plugin is `extra` and reaches only into the SDK + `plugin/types`, it is a strong candidate for a standalone community repo. The audit ([docs/lean-core/plugin-audit.md](./docs/lean-core/plugin-audit.md)) marks plugins as `clean` or `tangled` based on internal-import count. Clean plugins follow the same shape as [`shellenv`](https://github.com/Soul-Brews-Studio/maw-js/pull/816) and [`rename`](https://github.com/Soul-Brews-Studio/maw-js/pull/859) — see those PRs for the canonical extraction recipe.
+
+Tangled plugins (those reaching into `core/fleet`, `core/matcher`, peer plugins, or shared helpers) need an SDK widening ([#626](https://github.com/Soul-Brews-Studio/maw-js/issues/626)) before extraction. File an issue against the lean-core epic ([#640](https://github.com/Soul-Brews-Studio/maw-js/issues/640)) describing what your plugin needs from the SDK.
+
+## Code of Conduct
+
+See [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md). In short: be kind, assume good faith, name the behavior not the person.
+
+## Security
+
+See [SECURITY.md](./SECURITY.md) for responsible disclosure.
+
+## License
+
+By contributing, you agree that your contributions will be licensed under the repository's [LICENSE](./LICENSE).

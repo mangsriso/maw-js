@@ -6,12 +6,26 @@
  * (Apple's Local Network Privacy blocks Bun/Node fetch).
  *
  * Auto-signs requests with HMAC-SHA256 when federationToken is configured.
+ *
+ * v3 from-signing (#804 Step 4 SIGN): callers pass `from: "<oracle>:<node>"`
+ * (or `from: "auto"` to derive from `config.oracle ?? "mawjs"` + `config.node`).
+ * When set, the request additionally carries the v3 header set
+ * (`X-Maw-From`, `X-Maw-Signature-V3`, `X-Maw-Auth-Version: v3`) keyed
+ * by the local peer-key on top of the v2 token signature. Both layers
+ * coexist on the wire so v2-only verifiers stay green during rollout.
  */
 
-import { signHeaders } from "../../lib/federation-auth";
+import { signHeaders, signHeadersV3, resolveFromAddress } from "../../lib/federation-auth";
+import { getPeerKey } from "../../lib/peer-key";
 import { loadConfig } from "../../config";
 
 const IS_MACOS = process.platform === "darwin";
+
+// #653: cap response body to defend against a hostile peer returning an
+// unbounded stream. 10 MB matches the project convention for untrusted
+// HTTP bodies (see plugin-install tarball cap). Callers can override via
+// opts.maxBytes when a larger ceiling is genuinely needed.
+const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
 
 export interface CurlResponse {
   ok: boolean;
@@ -23,18 +37,71 @@ export async function curlFetch(url: string, opts?: {
   method?: string;
   body?: string;
   timeout?: number;
+  maxBytes?: number;
+  /**
+   * v3 from-signing (#804 Step 4 SIGN). Pass an explicit `<oracle>:<node>`
+   * string when the caller already knows the sender, or `"auto"` to derive
+   * `<config.oracle ?? "mawjs">:<config.node>`. When set and resolvable,
+   * the request stacks the v3 headers (`X-Maw-From`, `X-Maw-Signature-V3`,
+   * `X-Maw-Auth-Version: v3`) on top of any v2 token-signed headers so the
+   * peer can authenticate against its TOFU pubkey cache (Step 2).
+   *
+   * `"auto"` silently skips signing when no `node` is configured — that
+   * posture is single-node, no fleet, no v3 anchor. Explicit-string mode
+   * never silently skips: the caller asserted an identity and signing must
+   * succeed or fail loud (see the throws in signRequestV3).
+   */
+  from?: string | "auto";
 }): Promise<CurlResponse> {
   // Build auth headers
   const headers: Record<string, string> = {};
   if (opts?.body) headers["Content-Type"] = "application/json";
   try {
-    const token = loadConfig().federationToken;
+    const config = loadConfig();
+    const token = config.federationToken;
+    const urlObj = new URL(url);
     if (token) {
-      const urlObj = new URL(url);
+      // v1/v2 token signing — left intentionally body-less (v1) for now to
+      // preserve byte-for-byte compatibility with the existing wire format.
+      // Tightening to v2 (body-bound) is a separate decision tracked under
+      // the federation-audit follow-ups; v3 below is what we add here.
       const signed = signHeaders(token, opts?.method || "GET", urlObj.pathname);
       Object.assign(headers, signed);
     }
-  } catch {}
+    // v3 from-signing layer (#804 Step 4 SIGN). Stacks on top of v2 — both
+    // signatures bind the SAME `X-Maw-Timestamp` because signHeadersV3
+    // emits its own ts (we re-use it here by passing through). Verifier
+    // (Step 4 VERIFY) picks the v3 slot first; falls back to v2 token if
+    // the sender is uncached / v3 absent.
+    if (opts?.from) {
+      const fromAddress = opts.from === "auto"
+        ? resolveFromAddress({ oracle: config.oracle, node: config.node })
+        : opts.from;
+      if (fromAddress) {
+        const peerKey = getPeerKey();
+        const v3 = signHeadersV3({
+          peerKey,
+          fromAddress,
+          method: opts?.method || "GET",
+          path: urlObj.pathname,
+          body: opts?.body,
+        });
+        // v2 also wrote X-Maw-Timestamp + X-Maw-Auth-Version above. v3's
+        // header overrides X-Maw-Auth-Version → "v3" so the verifier looks
+        // at the v3 slot. The shared timestamp is fine — both signatures
+        // bind the same instant.
+        Object.assign(headers, v3);
+      }
+    }
+  } catch (err) {
+    // Fail closed: if a token is configured but signing throws (config load
+    // failure, malformed URL, etc.), do NOT fall through to an unsigned
+    // request — peers would reject with a bare 401 and the user would see
+    // no diagnosis. Surface the signing failure and abort the call.
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[curl-fetch] signing failed for ${url}: ${msg}`);
+    return { ok: false, status: 0, data: null };
+  }
 
   // Prefer native fetch (Linux, remote hosts)
   // Fall back to curl on macOS (Local Network Privacy blocks fetch for LAN/WG)
@@ -45,6 +112,7 @@ export async function curlFetch(url: string, opts?: {
 }
 
 async function nativeFetch(url: string, opts: typeof curlFetch extends (u: string, o?: infer O) => any ? O : never, headers: Record<string, string>): Promise<CurlResponse> {
+  const maxBytes = opts?.maxBytes ?? DEFAULT_MAX_BYTES;
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), opts?.timeout || 10000);
@@ -55,17 +123,58 @@ async function nativeFetch(url: string, opts: typeof curlFetch extends (u: strin
       signal: controller.signal,
     });
     clearTimeout(timeout);
-    const text = await res.text();
+
+    // #653: reject before buffering if the peer declares an oversized body.
+    const declared = Number(res.headers.get("content-length") ?? 0);
+    if (declared > maxBytes) {
+      controller.abort();
+      return { ok: false, status: res.status, data: { error: `body exceeded ${maxBytes} bytes` } };
+    }
+
+    // Stream-read with a running byte cap — Content-Length can be absent or
+    // spoofed, so we must enforce during the read, not only up front.
+    const reader = res.body?.getReader();
+    if (!reader) {
+      return { ok: res.ok, status: res.status, data: null };
+    }
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        try { await reader.cancel(); } catch { /* best effort */ }
+        controller.abort();
+        return { ok: false, status: res.status, data: { error: `body exceeded ${maxBytes} bytes` } };
+      }
+      chunks.push(value);
+    }
+    const buf = new Uint8Array(total);
+    let off = 0;
+    for (const c of chunks) { buf.set(c, off); off += c.byteLength; }
+    const text = new TextDecoder().decode(buf);
     const data = text ? JSON.parse(text) : null;
     return { ok: res.ok, status: res.status, data };
-  } catch {
+  } catch (err) {
+    // Surface the failure (#385 site 1). Previously this catch swallowed
+    // every error — abort, JSON parse, network, DNS — and callers saw a
+    // bare {ok:false, status:0} with no diagnosis. We keep the return
+    // shape (22 callers depend on it) and warn loud before returning.
+    // Note: signing failures return early at the catch above, so this
+    // path never fires for signing errors — no duplicate output.
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`\x1b[33m⚠\x1b[0m nativeFetch failed: ${opts?.method ?? "GET"} ${url} — ${msg}`);
     return { ok: false, status: 0, data: null };
   }
 }
 
 async function curlSpawn(url: string, opts: typeof curlFetch extends (u: string, o?: infer O) => any ? O : never, headers: Record<string, string>): Promise<CurlResponse> {
+  const maxBytes = opts?.maxBytes ?? DEFAULT_MAX_BYTES;
   const timeoutSec = Math.ceil((opts?.timeout || 10000) / 1000);
-  const args = ["curl", "-sf", "--max-time", String(timeoutSec)];
+  // curl --max-filesize refuses the transfer if Content-Length exceeds the
+  // cap; we still track bytes on the pipe because the header can be missing.
+  const args = ["curl", "-sf", "--max-time", String(timeoutSec), "--max-filesize", String(maxBytes)];
   if (opts?.method) args.push("-X", opts.method);
   for (const [k, v] of Object.entries(headers)) {
     args.push("-H", `${k}: ${v}`);
@@ -75,9 +184,31 @@ async function curlSpawn(url: string, opts: typeof curlFetch extends (u: string,
 
   try {
     const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe", windowsHide: true });
-    const text = await new Response(proc.stdout).text();
+    const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    let exceeded = false;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        exceeded = true;
+        try { await reader.cancel(); } catch { /* best effort */ }
+        try { proc.kill(); } catch { /* best effort */ }
+        break;
+      }
+      chunks.push(value);
+    }
     const code = await proc.exited;
+    if (exceeded) {
+      return { ok: false, status: 0, data: { error: `body exceeded ${maxBytes} bytes` } };
+    }
     if (code !== 0) return { ok: false, status: code, data: null };
+    const buf = new Uint8Array(total);
+    let off = 0;
+    for (const c of chunks) { buf.set(c, off); off += c.byteLength; }
+    const text = new TextDecoder().decode(buf);
     return { ok: true, status: 200, data: text ? JSON.parse(text) : null };
   } catch {
     return { ok: false, status: 0, data: null };

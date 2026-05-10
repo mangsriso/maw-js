@@ -69,26 +69,87 @@ export async function cmdFederationStatus() {
     return;
   }
 
-  // Fetch peer agent counts in parallel for online peers
+  // Fetch peer agent counts in parallel for reachable peers
   const counts = await Promise.all(
     statuses.map(p => p.reachable ? fetchPeerAgentCount(p.url) : Promise.resolve(0))
   );
 
-  let online = 1; // local is always online (we're executing in it)
+  let reachableCount = 1; // local is always reachable (we're executing in it)
   for (let i = 0; i < statuses.length; i++) {
     const { url, reachable, latency } = statuses[i];
     const agentCount = counts[i];
-    if (reachable) online++;
+    if (reachable) reachableCount++;
 
     const dot = reachable ? "\x1b[32m●\x1b[0m" : "\x1b[31m●\x1b[0m";
+    // "reachable" is truthful — we only verified local→peer direction.
+    // The reverse direction (peer→local) is NOT checked here. See PR #398
+    // for the symmetric-pair proposal (`maw federation --verify`).
     const status = reachable
-      ? `\x1b[32monline\x1b[0m  \x1b[90m${latency}ms · ${agentCount} agent${agentCount !== 1 ? "s" : ""}\x1b[0m`
-      : "\x1b[31moffline\x1b[0m";
+      ? `\x1b[32mreachable\x1b[0m  \x1b[90m${latency}ms · ${agentCount} agent${agentCount !== 1 ? "s" : ""}\x1b[0m`
+      : "\x1b[31munreachable\x1b[0m";
 
     const label = labelForPeer(url, named);
     console.log(`  ${dot}  \x1b[37m${label}\x1b[0m  ${status}`);
     console.log(`     \x1b[90m${url}\x1b[0m`);
   }
 
-  console.log(`\n\x1b[90m${online}/${totalNodes} online\x1b[0m\n`);
+  console.log(`\n\x1b[90m${reachableCount}/${totalNodes} reachable (one-way; use --verify for pair-symmetric check — PR #398)\x1b[0m\n`);
+}
+
+/**
+ * maw federation --verify — pair-symmetric check.
+ *
+ * Runs the one-way `maw federation` output first, then for each reachable peer
+ * asks their `/api/federation/status` whether local is in their peer list and
+ * marked reachable. Classifies each pair as healthy / half-up / down / unknown
+ * and exits non-zero if any pair is non-healthy.
+ *
+ * Exit codes (when called from CLI handler — see federation/index.ts):
+ *   0 : all pairs healthy
+ *   1 : at least one pair non-healthy
+ */
+export async function cmdFederationStatusVerify(): Promise<{ ok: boolean }> {
+  const { getFederationStatusSymmetric } = await import("../../core/transport/peers");
+  const config = loadConfig();
+  const named = config.namedPeers ?? [];
+  const result = await getFederationStatusSymmetric();
+
+  console.log(
+    `\n\x1b[36;1mFederation Status — Symmetric\x1b[0m  ` +
+    `\x1b[90m${result.totalPairs} pair${result.totalPairs !== 1 ? "s" : ""} · local: ${result.localNode}\x1b[0m\n`
+  );
+
+  if (result.totalPairs === 0) {
+    console.log("\x1b[90mNo peers configured. Add namedPeers[] to maw.config.json.\x1b[0m\n");
+    return { ok: true };
+  }
+
+  for (const p of result.pairs) {
+    const label = labelForPeer(p.url, named);
+    let dot: string, state: string;
+    switch (p.pair) {
+      case "healthy":
+        dot = "\x1b[32m●\x1b[0m";
+        state = "\x1b[32mhealthy\x1b[0m  \x1b[90m(A↔B)\x1b[0m";
+        break;
+      case "half-up":
+        dot = "\x1b[33m◐\x1b[0m";
+        state = `\x1b[33mhalf-up\x1b[0m  \x1b[90m(A→B OK, B→A failed${p.reason ? `: ${p.reason}` : ""})\x1b[0m`;
+        break;
+      case "down":
+        dot = "\x1b[31m●\x1b[0m";
+        state = `\x1b[31mdown\x1b[0m  \x1b[90m(${p.reason ?? "both directions failing"})\x1b[0m`;
+        break;
+      case "unknown":
+      default:
+        dot = "\x1b[90m○\x1b[0m";
+        state = `\x1b[90munknown\x1b[0m  \x1b[90m(${p.reason ?? "reverse check inconclusive"})\x1b[0m`;
+        break;
+    }
+    console.log(`  ${dot}  \x1b[37m${label}\x1b[0m  ${state}`);
+    console.log(`     \x1b[90m${p.url}\x1b[0m`);
+  }
+
+  console.log(`\n\x1b[90m${result.healthyPairs}/${result.totalPairs} pairs healthy\x1b[0m\n`);
+  return { ok: result.healthyPairs === result.totalPairs };
 }

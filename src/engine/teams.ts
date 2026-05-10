@@ -4,11 +4,23 @@ import { homedir } from "os";
 import { tmux } from "../core/transport/tmux";
 import type { MawWS } from "../core/types";
 
+// Runtime shape of a team member as stored in ~/.claude/teams/<team>/config.json.
+// Superset of TeamMember (in commands/plugins/team/team-helpers) — Claude Code's
+// team infra tacks on `cwd` + `joinedAt` at spawn time, which isTeamAlive relies on.
+interface TeamMemberRuntime {
+  name?: string;
+  agentType?: string;
+  backendType?: string;
+  tmuxPaneId?: string;
+  cwd?: string;
+  joinedAt?: number;
+}
+
 interface TeamData {
   name: string;
   description: string;
-  members: any[];
-  tasks: any[];
+  members: TeamMemberRuntime[];
+  tasks: unknown[];
   alive: boolean;
 }
 
@@ -24,7 +36,7 @@ async function livePaneIds(): Promise<Set<string>> {
 }
 
 /** Check if a team has any alive members */
-function isTeamAlive(members: any[], panes: Set<string>): boolean {
+function isTeamAlive(members: TeamMemberRuntime[], panes: Set<string>): boolean {
   for (const m of members) {
     // tmux-mode: check if pane exists
     if (m.backendType === "tmux" && m.tmuxPaneId && panes.has(m.tmuxPaneId)) return true;
@@ -54,7 +66,7 @@ export async function scanTeams(): Promise<TeamData[]> {
       try {
         const config = JSON.parse(readFileSync(join(TEAMS_DIR, d, "config.json"), "utf-8"));
         const tasksDir = join(TASKS_DIR, d);
-        let tasks: any[] = [];
+        let tasks: unknown[] = [];
         try {
           tasks = readdirSync(tasksDir)
             .filter(f => f.endsWith(".json"))

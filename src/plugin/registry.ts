@@ -1,46 +1,95 @@
 /**
  * Plugin registry — discover plugin packages and invoke them.
  *
- * Scans two well-known directories for plugin packages (subdirs with plugin.json):
+ * Scans the canonical plugin install directory for packages with a plugin.json:
  *   ~/.maw/plugins/<name>/plugin.json
- *   ~/.oracle/commands/<name>/plugin.json
  *
  * Reuses wasm-bridge.ts infra (buildImportObject, preCacheBridge, readString, textEncoder).
  * Timeout: 5s hard limit matching command-registry.ts:193 pattern.
+ *
+ * ── Phase A gates (enforced at load time, not call-time) ────────────────────
+ *  1. Semver gate — `manifest.sdk` must satisfy the runtime SDK version.
+ *     Mismatch → plugin refused with an actionable error message.
+ *  2. Artifact hash — if `manifest.artifact.sha256` is set on a real (non-symlink)
+ *     install, the on-disk bundle's sha256 must match. Mismatch → refuse.
+ *  3. Dev-mode (symlink) detection — if ~/.maw/plugins/<name>/ is a symlink,
+ *     we treat it as a `linked (dev)` install and skip hash verification
+ *     entirely. This replaces the rejected `sha256: "dev"` sentinel idea
+ *     (sdk-consumer's cleaner label-only approach).
+ *  4. Legacy manifests (no artifact field) still load — warn once, allow.
  */
 
 import { existsSync, readFileSync, readdirSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
 import { loadManifestFromDir } from "./manifest";
 import { loadConfig } from "../config";
+import { verbose, info } from "../cli/verbosity";
+import type { LoadedPlugin } from "./types";
+import { satisfies, formatSdkMismatchError } from "./registry-semver";
 import {
-  buildImportObject,
-  preCacheBridge,
-  readString,
-  textEncoder,
-} from "../cli/wasm-bridge";
-import type { LoadedPlugin, InvokeContext, InvokeResult } from "./types";
+  runtimeSdkVersion,
+  scanDirs,
+  hashFile,
+  isDevModeInstall,
+  warnLegacyOnce,
+} from "./registry-helpers";
+import { resolveActiveProfileFilter, resetProfileFilterCache } from "../lib/profile-loader";
 
-const PLUGIN_INVOKE_TIMEOUT_MS = 5_000;
-const WASM_MEMORY_MAX_PAGES = 256; // 16MB
-
-// Single scan dir — everything lives in ~/.maw/plugins/
-// Core plugins auto-installed on `maw update` or first run.
-const SCAN_DIRS = [
-  join(homedir(), ".maw", "plugins"),
-];
+// Re-export everything that external callers import from this module
+export { satisfies, formatSdkMismatchError } from "./registry-semver";
+export {
+  runtimeSdkVersion,
+  hashFile,
+  isDevModeInstall,
+  __resetDiscoverStateForTests,
+} from "./registry-helpers";
+export { invokePlugin } from "./registry-invoke";
 
 /**
- * Scan the two canonical plugin package directories and return all valid packages.
- * Each subdirectory is checked for a plugin.json manifest.
- * Silently skips directories with missing or invalid manifests.
+ * In-process memoization of the discovery result. Populated lazily on the
+ * first `discoverPackages()` call within a CLI invocation; reused by all
+ * subsequent calls in the same process. Tests / install-flows that mutate
+ * plugin state during a single invocation can clear it via
+ * `resetDiscoverCache()`.
+ *
+ * Why: profiler agent (loop iter 9, 2026-04-16) measured ~50ms per call,
+ * called 2× on the unknown-cmd path (cli.ts:66 → fuzzy → then again via
+ * hooks-registry). Per-invocation cache kills the redundant rescan
+ * without affecting fresh reads across different CLI invocations (each
+ * bun invocation is a new process, cache starts empty).
+ */
+let _discoverCache: LoadedPlugin[] | null = null;
+
+/** Clear the discovery cache. For install-flow + tests. Also flushes the
+ *  profile-resolver cache so a re-scan picks up new plugins under the
+ *  active profile filter (#890). */
+export function resetDiscoverCache(): void {
+  _discoverCache = null;
+  resetProfileFilterCache();
+}
+
+/**
+ * Scan the canonical plugin package directory and return valid packages.
+ * Each subdirectory is checked for a plugin.json manifest. Plugins that
+ * fail the Phase A gates (semver / hash) are refused with a loud message
+ * and NOT returned — they do not enter the runtime command surface.
+ *
+ * Result is memoized within the current process. Call `resetDiscoverCache()`
+ * after mutating plugin state (install, build) to force a fresh scan.
  */
 export function discoverPackages(): LoadedPlugin[] {
+  if (_discoverCache !== null) return _discoverCache;
   const plugins: LoadedPlugin[] = [];
   const disabled = loadConfig().disabledPlugins ?? [];
+  const runtimeVer = runtimeSdkVersion();
+  let legacyCount = 0;
+  // #355 — aggregate mode counts for a single compact summary line instead
+  // of 53 lines of per-plugin load noise. Skills-cli's test-agents run flagged
+  // the per-plugin output as UX pollution. Verbose-by-default is still the
+  // invariant (#343), but the right grain is SUMMARY, not per-entry.
+  const modeCounts = { symlink: 0, artifact: 0, unbuilt: 0, legacy: 0 };
 
-  for (const baseDir of SCAN_DIRS) {
+  for (const baseDir of scanDirs()) {
     if (!existsSync(baseDir)) continue;
     let entries: string[];
     try {
@@ -52,197 +101,126 @@ export function discoverPackages(): LoadedPlugin[] {
     }
     for (const entry of entries) {
       const pkgDir = join(baseDir, entry);
+      let loaded: LoadedPlugin | null;
       try {
-        const loaded = loadManifestFromDir(pkgDir);
-        if (loaded) {
-          if (disabled.includes(loaded.manifest.name)) {
-            loaded.disabled = true;
-          }
-          plugins.push(loaded);
-        }
+        loaded = loadManifestFromDir(pkgDir);
       } catch {
-        // invalid manifest — skip silently
+        // Invalid manifest — skip silently (noisy dirs in ~/.maw/plugins
+        // that aren't plugins shouldn't spam users).
+        continue;
       }
+      if (!loaded) continue;
+
+      const m = loaded.manifest;
+
+      // Gate 1: SDK semver. Mismatch → refuse with actionable error.
+      if (!satisfies(runtimeVer, m.sdk)) {
+        console.warn(formatSdkMismatchError(m.name, m.sdk, runtimeVer));
+        continue;
+      }
+
+      // Gate 2: artifact hash (real installs only — dev-mode skips).
+      const devMode = isDevModeInstall(pkgDir);
+      if (m.artifact && !devMode) {
+        if (m.artifact.sha256 === null) {
+          console.warn(
+            `\x1b[33m⚠\x1b[0m plugin '${m.name}' is unbuilt — run \`maw plugin build\` in ${pkgDir}`,
+          );
+          continue;
+        }
+        // Resolve artifact path against the plugin dir.
+        const artifactPath = join(pkgDir, m.artifact.path);
+        if (!existsSync(artifactPath)) {
+          console.warn(
+            `\x1b[31m✗\x1b[0m plugin '${m.name}' artifact missing: ${m.artifact.path}`,
+          );
+          continue;
+        }
+        const observed = hashFile(artifactPath);
+        if (observed !== m.artifact.sha256) {
+          console.warn(
+            `\x1b[31m✗\x1b[0m plugin '${m.name}' artifact hash mismatch — refusing to load.\n` +
+            `  expected: ${m.artifact.sha256}\n` +
+            `  actual:   ${observed}\n` +
+            `  fix: re-install from a trusted source or re-run \`maw plugin build\``,
+          );
+          continue;
+        }
+      } else if (!m.artifact) {
+        // Legacy plugin (no artifact field). Allow — but count for the one-shot
+        // warning. #343b flips #341b: symlinks now count too. Dev-mode symlinks
+        // are legitimately "legacy-shaped" at runtime; omitting them under-reported
+        // the real legacy footprint on mixed dev machines. --quiet suppresses via
+        // warn(); --verbose exposes the per-plugin mode line below.
+        legacyCount++;
+      }
+
+      if (disabled.includes(m.name)) {
+        loaded.disabled = true;
+      }
+
+      // Aggregate mode for post-loop summary (#355 — replace 53 per-plugin
+      // lines with one compact summary). Per-plugin detail is still
+      // retrievable via `maw plugin ls` when needed.
+      if (devMode) modeCounts.symlink++;
+      else if (m.artifact?.sha256) modeCounts.artifact++;
+      else if (m.artifact) modeCounts.unbuilt++;
+      else modeCounts.legacy++;
+
+      plugins.push(loaded);
     }
   }
+
+  // #355 — one-line summary instead of per-plugin spam. Still emits via
+  // verbose() so --quiet suppresses it (verbose-by-default invariant from #343).
+  verbose(() => {
+    const parts: string[] = [];
+    if (modeCounts.symlink) parts.push(`${modeCounts.symlink} symlink`);
+    if (modeCounts.artifact) parts.push(`${modeCounts.artifact} artifact`);
+    if (modeCounts.unbuilt) parts.push(`${modeCounts.unbuilt} unbuilt`);
+    if (modeCounts.legacy) parts.push(`${modeCounts.legacy} legacy`);
+    if (parts.length) info(`loaded ${plugins.length} plugins (${parts.join(", ")})`);
+  });
+
+  warnLegacyOnce(legacyCount);
+
+  // #404 — apply weight overrides so category survives `install --link` replaces
+  // where the new plugin.json omitted `weight`.
+  const overridesPath = join(scanDirs()[0]!, ".overrides.json");
+  try {
+    const overrides = JSON.parse(readFileSync(overridesPath, "utf8")) as Record<string, number>;
+    for (const p of plugins) {
+      const w = overrides[p.manifest.name];
+      if (typeof w === "number") p.manifest.weight = w;
+    }
+  } catch { /* absent or unreadable */ }
 
   // Sort by weight (lower = first, default 50) — like Drupal module weight
   plugins.sort((a, b) => (a.manifest.weight ?? 50) - (b.manifest.weight ?? 50));
 
-  return plugins;
-}
-
-/**
- * Instantiate a plugin's WASM module and call handle(ptr, len) with the context.
- * Context is JSON-encoded and written to shared memory; result is read back.
- * Hard 5-second timeout matches command-registry.ts:193.
- */
-export async function invokePlugin(
-  plugin: LoadedPlugin,
-  ctx: InvokeContext,
-): Promise<InvokeResult> {
-  // Universal flags — every plugin gets these for free
-  if (ctx.source === "cli") {
-    const args = ctx.args as string[];
-    const flag = args[0];
-    const m = plugin.manifest;
-
-    // -v / --version — show plugin metadata
-    if (flag === "-v" || flag === "--version" || flag === "-version") {
-      const surfaces = [
-        m.cli ? `cli:${m.cli.command}` : null,
-        m.api ? `api:${m.api.path}` : null,
-        m.hooks ? "hooks" : null,
-        m.transport?.peer ? "peer" : null,
-      ].filter(Boolean).join(", ");
-      return {
-        ok: true,
-        output: `${m.name} v${m.version} (${plugin.kind}, weight:${m.weight ?? 50})\n  ${m.description || ""}\n  surfaces: ${surfaces}\n  dir: ${plugin.dir}`,
-      };
-    }
-
-    // -h / --help — show usage + flags + surfaces
-    if (flag === "-h" || flag === "--help" || flag === "-help") {
-      const lines: string[] = [];
-      lines.push(`${m.name} v${m.version}`);
-      if (m.description) lines.push(`  ${m.description}`);
-      lines.push("");
-      if (m.cli?.help) lines.push(`  usage: ${m.cli.help}`);
-      else if (m.cli) lines.push(`  usage: maw ${m.cli.command}`);
-      if (m.cli?.aliases?.length) lines.push(`  aliases: ${m.cli.aliases.join(", ")}`);
-      if (m.cli?.flags) {
-        lines.push("  flags:");
-        for (const [k, v] of Object.entries(m.cli.flags)) lines.push(`    ${k.padEnd(20)} ${v}`);
-      }
-      lines.push("");
-      lines.push("  surfaces:");
-      if (m.cli) lines.push(`    cli: maw ${m.cli.command}`);
-      if (m.api) lines.push(`    api: ${m.api.methods.join("/")} ${m.api.path}`);
-      if (m.transport?.peer) lines.push(`    peer: maw hey plugin:${m.name}`);
-      if (m.hooks) lines.push(`    hooks: ${Object.keys(m.hooks).join(", ")}`);
-      lines.push(`\n  dir: ${plugin.dir}`);
-      return { ok: true, output: lines.join("\n") };
-    }
-  }
-
-  // TS plugins — import and call handler directly (full access)
-  if (plugin.kind === "ts" && plugin.entryPath) {
-    // Guard process.exit — cmd* functions call it on error. Convert to throw
-    // so the handler's try/catch can capture the output and return it.
-    const origExit = process.exit;
-    process.exit = ((code?: number) => { throw Object.assign(new Error("exit"), { exitCode: code ?? 0 }); }) as any;
-
-    try {
-      const mod = await import(plugin.entryPath);
-      const handler = mod.default || mod.handler;
-      if (!handler) return { ok: false, error: "TS plugin has no default export or handler" };
-
-      const result = await handler(ctx);
-      if (result && typeof result === "object" && "ok" in result) return result;
-      return { ok: true };
-    } catch (err: any) {
-      return { ok: false, error: err.message };
-    } finally {
-      process.exit = origExit;
-    }
-  }
-
-  // WASM plugins — instantiate and call handle(ptr, len) in sandbox
-  let wasmBytes: Uint8Array;
-  try {
-    wasmBytes = readFileSync(plugin.wasmPath);
-  } catch (err: any) {
-    return { ok: false, error: `failed to read wasm: ${err.message}` };
-  }
-
-  // Compile
-  let mod: WebAssembly.Module;
-  try {
-    mod = new WebAssembly.Module(wasmBytes);
-  } catch (err: any) {
-    return { ok: false, error: `wasm compile error: ${err.message}` };
-  }
-
-  const exportNames = WebAssembly.Module.exports(mod).map(
-    (e: { name: string }) => e.name,
+  // Phase 2 (#890) — apply active-profile filter. Resolution happens at most
+  // once per process via the cache in profile-loader.ts. The "all" profile
+  // (default for fresh installs) returns null = passthrough, so the hot path
+  // pays only one stat() call. Non-"all" profiles narrow the registry to the
+  // resolved name set; everything outside is dropped silently here so it
+  // never reaches the command surface.
+  //
+  // Tier defaulting (#890 spec): plugins missing the `tier` field are
+  // treated as "core" at the loader layer so untiered legacy plugins stay
+  // visible under conservative tier filters (e.g. profile.tiers === ["core"]).
+  // The pure resolver in profile-loader.ts keeps its Phase-1 contract
+  // (untiered = excluded); the default lives here in the wiring layer where
+  // the audit doc's "missing → core" convention applies.
+  const filter = resolveActiveProfileFilter(
+    plugins.map((p) => ({
+      name: p.manifest.name,
+      tier: p.manifest.tier ?? "core",
+    })),
   );
-  if (!exportNames.includes("handle") || !exportNames.includes("memory")) {
-    return { ok: false, error: "wasm missing required handle+memory exports" };
-  }
+  const filtered = filter === null
+    ? plugins
+    : plugins.filter((p) => filter.has(p.manifest.name));
 
-  // Late-binding refs (chicken-and-egg with memory/alloc exports)
-  let wasmMemory!: WebAssembly.Memory;
-  let wasmAlloc!: (size: number) => number;
-
-  const bridge = buildImportObject(
-    () => wasmMemory,
-    () => wasmAlloc,
-    { memoryMaxPages: WASM_MEMORY_MAX_PAGES },
-  );
-
-  let instance: WebAssembly.Instance;
-  try {
-    instance = new WebAssembly.Instance(mod, bridge);
-  } catch (err: any) {
-    return { ok: false, error: `wasm instantiation failed: ${err.message}` };
-  }
-
-  wasmMemory = instance.exports.memory as WebAssembly.Memory;
-  wasmAlloc =
-    (instance.exports.maw_alloc as (size: number) => number) ??
-    bridge.env.maw_alloc;
-
-  const handle = instance.exports.handle as (ptr: number, len: number) => number;
-
-  const exec = (async (): Promise<InvokeResult> => {
-    // Pre-warm identity + federation caches (best-effort, won't throw)
-    await preCacheBridge(bridge);
-
-    // Write JSON-encoded context into shared memory
-    const json = JSON.stringify(ctx);
-    const bytes = textEncoder.encode(json);
-    const argPtr =
-      (instance.exports.maw_alloc as Function)?.(bytes.length) ?? 0;
-    new Uint8Array(wasmMemory.buffer).set(bytes, argPtr);
-
-    // Invoke handle(ptr, len) — matches command-registry.ts protocol
-    const resultPtr = handle(argPtr, bytes.length);
-
-    if (resultPtr > 0) {
-      const view = new DataView(wasmMemory.buffer);
-      const len = view.getUint32(resultPtr, true);
-      if (len > 0 && len < 1_000_000) {
-        // Length-prefixed protocol (u32 LE + UTF-8 payload)
-        const output = readString(wasmMemory, resultPtr + 4, len);
-        return { ok: true, ...(output ? { output } : {}) };
-      }
-      // Null-terminated fallback for legacy modules
-      const raw = new Uint8Array(wasmMemory.buffer);
-      let end = resultPtr;
-      while (end < raw.length && raw[end] !== 0) end++;
-      const output = new TextDecoder().decode(raw.slice(resultPtr, end));
-      return { ok: true, ...(output ? { output } : {}) };
-    }
-
-    return { ok: true };
-  })();
-
-  // 5-second hard deadline — matches command-registry.ts:193
-  const timeoutGuard = new Promise<InvokeResult>((_, reject) =>
-    setTimeout(
-      () =>
-        reject(
-          new Error(
-            `[wasm-safety] timed out after ${PLUGIN_INVOKE_TIMEOUT_MS / 1000}s`,
-          ),
-        ),
-      PLUGIN_INVOKE_TIMEOUT_MS,
-    ),
-  );
-
-  try {
-    return await Promise.race([exec, timeoutGuard]);
-  } catch (err: any) {
-    return { ok: false, error: err.message };
-  }
+  _discoverCache = filtered;
+  return filtered;
 }

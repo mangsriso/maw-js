@@ -22,3 +22,21 @@ fleet/*.json
 .claude/skills/
 *.pem
 .claude/scheduled_tasks.lock
+
+# Team-agents worktrees (parallel fix branches live here)
+agents/
+
+# Local env + accidental self-symlink (cleanup 2026-04-17)
+.envrc
+maw-js
+
+# Audio assets — keep local-only, not tracked (cleanup 2026-04-17)
+ui/office/*.mp3
+ui/office/*.wav
+ui/office/*.ogg
+
+# ui/office/assets — built artifacts (rebuilt on demand, not tracked) (#451)
+ui/office/assets/
+
+# psi/ — ASCII alias of ψ/ vault runtime data (#451)
+psi/

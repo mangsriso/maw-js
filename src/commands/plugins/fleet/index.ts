@@ -9,8 +9,14 @@ export default async function handler(ctx: InvokeContext): Promise<InvokeResult>
   const logs: string[] = [];
   const origLog = console.log;
   const origError = console.error;
-  console.log = (...a: any[]) => logs.push(a.map(String).join(" "));
-  console.error = (...a: any[]) => logs.push(a.map(String).join(" "));
+  console.log = (...a: any[]) => {
+    if (ctx.writer) ctx.writer(...a);
+    else logs.push(a.map(String).join(" "));
+  };
+  console.error = (...a: any[]) => {
+    if (ctx.writer) ctx.writer(...a);
+    else logs.push(a.map(String).join(" "));
+  };
 
   try {
     const args = ctx.source === "cli" ? (ctx.args as string[]) : [];
@@ -49,7 +55,7 @@ export default async function handler(ctx: InvokeContext): Promise<InvokeResult>
       const { cmdFleetSync } = await import("../../shared/fleet");
       await cmdFleetSync();
     } else if (sub === "snapshots" || sub === "snapshot-ls") {
-      const { listSnapshots } = await import("../../../snapshot");
+      const { listSnapshots } = await import("../../../core/fleet/snapshot");
       const snaps = listSnapshots();
       if (snaps.length === 0) {
         console.log("no snapshots yet");
@@ -62,7 +68,7 @@ export default async function handler(ctx: InvokeContext): Promise<InvokeResult>
         console.log(`  ${s.file.replace(".json", "")}  ${local}  \x1b[90m${s.trigger}\x1b[0m  ${s.sessionCount} sessions, ${s.windowCount} windows`);
       }
     } else if (sub === "restore") {
-      const { loadSnapshot, latestSnapshot } = await import("../../../snapshot");
+      const { loadSnapshot, latestSnapshot } = await import("../../../core/fleet/snapshot");
       const snap = args[1] ? loadSnapshot(args[1]) : latestSnapshot();
       if (!snap) {
         return { ok: false, error: "no snapshot found" };
@@ -76,10 +82,25 @@ export default async function handler(ctx: InvokeContext): Promise<InvokeResult>
           console.log(`  ${w.name}`);
         }
       }
+
+      if (args.includes("--all")) {
+        const { cmdWake } = await import("../../shared/wake-cmd");
+        console.log("");
+        for (const s of snap.sessions) {
+          const oracle = s.name.replace(/^\d+-/, "");
+          try {
+            await cmdWake(oracle, { attach: false });
+            console.log(`  \x1b[32m✓\x1b[0m ${s.name}`);
+          } catch (e: any) {
+            console.log(`  \x1b[31m✗\x1b[0m ${s.name}: ${e?.message || String(e)}`);
+          }
+        }
+      }
     } else if (sub === "snapshot") {
-      const { takeSnapshot } = await import("../../../snapshot");
-      const path = await takeSnapshot("manual");
-      console.log(`\x1b[32m📸\x1b[0m snapshot saved: ${path}`);
+      const { takeSnapshot } = await import("../../../core/fleet/snapshot");
+      const trigger = args[1] || "manual";
+      const path = await takeSnapshot(trigger);
+      console.log(`\x1b[32m📸\x1b[0m snapshot saved: ${path} (trigger: ${trigger})`);
     } else if (!sub) {
       const { cmdFleetLs } = await import("../../shared/fleet");
       await cmdFleetLs();

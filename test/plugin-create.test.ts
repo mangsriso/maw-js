@@ -23,7 +23,11 @@ function tmpDir(): string {
 
 afterEach(() => {
   for (const d of created.splice(0)) {
-    if (existsSync(d)) rmSync(d, { recursive: true, force: true });
+    try {
+      if (existsSync(d)) rmSync(d, { recursive: true, force: true });
+    } catch {
+      // Best-effort: one leaked dir shouldn't block sibling cleanup.
+    }
   }
 });
 
@@ -313,9 +317,14 @@ describe("scaffoldRust — destination guard (via cmdPluginCreate)", () => {
     // We exercise the check in cmdPluginCreate by pointing --dest at an existing dir
     const existing = tmpDir();
 
-    // Patch process.exit to capture the call
+    // Patch process.exit AND console.error — the guard prints the dest path to
+    // stderr, which otherwise looks like a real test failure in CI logs and
+    // previously tripped osc8-gater (iter 10) into flagging a false "blocked" state.
     const origExit = process.exit;
+    const origError = console.error;
     let exitCode: number | undefined;
+    const errs: string[] = [];
+    console.error = (...a: unknown[]) => { errs.push(a.map(String).join(" ")); };
     (process as any).exit = (code: number) => { exitCode = code; throw new Error("exit:" + code); };
 
     try {
@@ -324,12 +333,14 @@ describe("scaffoldRust — destination guard (via cmdPluginCreate)", () => {
         "--rust": true,
         "--dest": existing,
       });
-    } catch (e: any) {
-      // expected — process.exit throws in test harness
+    } catch {
+      // expected — patched process.exit throws
     } finally {
       (process as any).exit = origExit;
+      console.error = origError;
     }
 
     expect(exitCode).toBe(1);
+    expect(errs.join("\n")).toContain("Destination already exists");
   });
 });

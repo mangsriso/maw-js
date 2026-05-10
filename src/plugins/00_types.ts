@@ -11,7 +11,7 @@ export type Late = (event: Readonly<FeedEvent>) => void;
 export type MawPlugin = (hooks: MawHooks) => void | (() => void);
 export type PluginScope = "builtin" | "user";
 
-export interface Scoped<T> { fn: T; scope: PluginScope; }
+export interface Scoped<T> { fn: T; scope: PluginScope; name?: string; }
 
 export interface MawHooks {
   gate(event: FeedEventType | "*", fn: Gate): void;

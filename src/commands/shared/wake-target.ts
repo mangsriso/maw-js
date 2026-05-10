@@ -7,6 +7,7 @@
  */
 
 import { hostExec } from "../../sdk";
+import { ghqFind } from "../../core/ghq";
 
 // --- URL/slug detection ---------------------------------------------------
 
@@ -30,7 +31,7 @@ function stripOracleSuffix(repoName: string): string {
   return repoName.replace(/-oracle$/, "");
 }
 
-export interface ParsedWakeTarget {
+interface ParsedWakeTarget {
   /** Oracle name derived from repo (e.g. "mawjs" from "mawjs-oracle") */
   oracle: string;
   /** org/repo slug for ghq clone (e.g. "Soul-Brews-Studio/mawjs-oracle") */
@@ -73,11 +74,11 @@ export function parseWakeTarget(target: string): ParsedWakeTarget | null {
  * resolveOracle handle the error downstream.
  */
 export async function ensureCloned(slug: string): Promise<void> {
-  const ghqHit = await hostExec(`ghq list --full-path | grep -i '/${slug}$' | head -1`).catch(() => "");
-  if (ghqHit.trim()) return;
+  const ghqHit = await ghqFind(`/${slug}`);
+  if (ghqHit) return;
   console.log(`\x1b[36m⚡\x1b[0m cloning ${slug}...`);
   try {
-    await hostExec(`ghq get -p github.com/${slug}`);
+    await hostExec(`ghq get github.com/${slug}`);
   } catch (e: any) {
     console.log(`\x1b[33m⚠\x1b[0m clone failed: ${e.message || e}\n  falling back to normal resolution`);
   }

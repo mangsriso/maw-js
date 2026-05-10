@@ -40,7 +40,7 @@ async function loadWasmPlugin(system: PluginSystem, path: string, filename: stri
           console.error(`[plugin] wasm trap in ${filename}: ${(err.message || err).slice(0, 120)}`);
         }
       });
-    }, source);
+    }, source, filename);
     system.register(filename, "wasm-shared", source);
     return;
   }
@@ -64,7 +64,7 @@ async function loadWasmPlugin(system: PluginSystem, path: string, filename: stri
           wasi.start(inst);
         } catch {}
       });
-    }, source);
+    }, source, filename);
     system.register(filename, "wasm-wasi", source);
     return;
   }
@@ -90,7 +90,7 @@ export async function loadPlugins(
         const mod = await import(spec);
         const plugin = mod.default ?? mod;
         if (typeof plugin === "function") {
-          system.load(plugin, source);
+          system.load(plugin, source, file);
           system.register(file, file.endsWith(".ts") ? "ts" : "js", source);
         }
       }

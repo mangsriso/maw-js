@@ -1,0 +1,297 @@
+import { hostExec, tmux, restoreTabOrder, takeSnapshot, getPaneInfos, isAgentCommand } from "../../sdk";
+import { ghqFind } from "../../core/ghq";
+import { buildCommandInDir, cfgTimeout, loadConfig, saveConfig } from "../../config";
+import { resolveWorktreeTarget } from "../../core/matcher/resolve-target";
+import { normalizeTarget } from "../../core/matcher/normalize-target";
+import { assertValidOracleName } from "../../core/fleet/validate";
+import { resolveOracle, findWorktrees, getSessionMap, resolveFleetSession, detectSession, setSessionEnv, sanitizeBranchName } from "./wake-resolve";
+import { attachToSession, ensureSessionRunning, createWorktree } from "./wake-session";
+import { maybeSplit } from "./wake-maybe-split";
+import { parseWakeTarget, ensureCloned } from "./wake-target";
+
+export async function cmdWake(oracle: string, opts: { task?: string; wt?: string; prompt?: string; incubate?: string; fresh?: boolean; attach?: boolean; listWt?: boolean; split?: boolean; repoPath?: string; urlRepoName?: string; allLocal?: boolean; engine?: string }): Promise<string> {
+  // Canonicalize the bare name before any lookup — strips trailing `/`, `/.git`, `/.git/`
+  // so `maw wake token-oracle/` (tab-completion artifact) resolves the same as `token-oracle`.
+  oracle = normalizeTarget(oracle);
+
+  const parsed = parseWakeTarget(oracle);
+  if (parsed) {
+    await ensureCloned(parsed.slug);
+    oracle = parsed.oracle;
+    if (!opts.urlRepoName) opts.urlRepoName = parsed.slug.split("/").pop();
+  }
+
+  // #358 — reject -view suffix at the user-input boundary (before any session work).
+  assertValidOracleName(oracle);
+  console.log(`\x1b[36m⚡\x1b[0m resolving ${oracle}...`);
+  let resolved: { repoPath: string; repoName: string; parentDir: string };
+
+  if (opts.repoPath) {
+    // #421 — caller already knows the exact on-disk path (e.g. `maw bud --org`
+    // just cloned it). Skip resolveOracle so a stale same-named repo in a
+    // different org can't shadow the freshly-created one.
+    const repoPath = opts.repoPath;
+    resolved = { repoPath, repoName: repoPath.split("/").pop()!, parentDir: repoPath.replace(/\/[^/]+$/, "") };
+  } else if (opts.incubate) {
+    const slug = opts.incubate;
+    // CodeQL js/incomplete-url-substring-sanitization: use prefix anchor, not
+    // substring match — `attacker.com/github.com/...` would have passed .includes.
+    const repoSlug = (
+      slug.startsWith("github.com/") ||
+      slug.startsWith("https://github.com/") ||
+      slug.startsWith("http://github.com/")
+    ) ? slug : `github.com/${slug}`;
+    console.log(`\x1b[36m⚡\x1b[0m incubating ${slug}...`);
+    await hostExec(`ghq get -u ${repoSlug}`);
+    const fullPath = await ghqFind(repoSlug);
+    if (!fullPath) throw new Error(`ghq could not find ${slug} after clone`);
+    const repoPath = fullPath;
+    resolved = { repoPath, repoName: repoPath.split("/").pop()!, parentDir: repoPath.replace(/\/[^/]+$/, "") };
+    if (!opts.task && !opts.wt) opts.wt = resolved.repoName.replace(/-/g, "");
+  } else {
+    resolved = await resolveOracle(oracle, { allLocal: opts.allLocal });
+  }
+
+  const { repoPath, repoName, parentDir } = resolved;
+
+  // #997 — when fuzzy match resolved a different repo (e.g. "v3" → "arra-oracle-v3-oracle"),
+  // update oracle to the resolved name so session/window names are correct.
+  const resolvedOracle = repoName.replace(/-oracle$/, "");
+  if (resolvedOracle !== oracle && repoName.endsWith("-oracle")) {
+    oracle = resolvedOracle;
+  }
+
+  // #673 — extract org/repo slug from ghq path (…/github.com/<org>/<repo>)
+  const ghSlug = repoPath.includes("github.com/")
+    ? repoPath.slice(repoPath.indexOf("github.com/") + "github.com/".length)
+    : repoName;
+  console.log(`\x1b[36m→\x1b[0m found \x1b[1m${ghSlug}\x1b[0m (${repoPath})`);
+  let session = await detectSession(oracle, opts.urlRepoName);
+  if (session) console.log(`\x1b[36m→\x1b[0m session exists: ${session}`);
+  else console.log(`\x1b[36m→\x1b[0m no session found, creating...`);
+
+  // #835 — consult unified shouldAutoWake. cmdWake is idempotent: if the
+  // session already exists, the helper returns wake=false and we skip the
+  // session-create branch (we still proceed to attach/select-window below).
+  // This makes the "wakes if missing" decision explicit + auditable.
+  const { shouldAutoWake } = await import("./should-auto-wake");
+  const wakeDecision = shouldAutoWake(oracle, {
+    site: "wake-cmd",
+    isLive: Boolean(session),
+  });
+
+  if (!session && wakeDecision.wake) {
+    // #769 — URL input names the new session after the full repo (e.g.
+    // "m5-oracle") so it's distinct from any unrelated sub-token sessions
+    // and immediately disambiguates future `maw wake` calls.
+    const baseName = getSessionMap()[oracle] || resolveFleetSession(oracle) || opts.urlRepoName || oracle;
+
+    // #994 — auto-assign NN- prefix to match fleet convention (01-maw-m5, 02-...).
+    // Scan existing sessions for numeric prefixes, pick max+1, zero-pad to 2 digits.
+    let session_: string;
+    if (/^\d+-/.test(baseName)) {
+      session_ = baseName;
+    } else {
+      const sessions = await tmux.listSessions().catch(() => [] as { name: string }[]);
+      let maxNum = 0;
+      for (const s of sessions) {
+        const m = s.name.match(/^(\d+)-/);
+        if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10));
+      }
+      session_ = `${String(maxNum + 1).padStart(2, "0")}-${baseName}`;
+    }
+    session = session_;
+    const mainWindowName = `${oracle}-oracle`;
+    await tmux.newSession(session, { window: mainWindowName, cwd: repoPath });
+    await setSessionEnv(session);
+    await new Promise(r => setTimeout(r, 300));
+    await tmux.sendText(`${session}:${mainWindowName}`, buildCommandInDir(mainWindowName, repoPath, opts.engine));
+    console.log(`\x1b[32m+\x1b[0m created session '${session}' (main: ${mainWindowName})`);
+
+    // Auto-register agent in config.agents so federation peers can route to it (#285)
+    const config = loadConfig();
+    const agents = config.agents || {};
+    if (!(oracle in agents)) {
+      const node = config.node || "local";
+      saveConfig({ agents: { ...agents, [oracle]: node } });
+      console.log(`\x1b[32m+\x1b[0m registered agent '${oracle}' → '${node}' in config.agents`);
+    }
+
+    // #1020 — session = team: auto-create team config so `maw team spawn`
+    // works without explicit `maw team create`.
+    const { ensureTeamConfig } = await import("../plugins/team/ensure-config");
+    if (ensureTeamConfig(oracle)) {
+      console.log(`\x1b[32m+\x1b[0m team '${oracle}' auto-created`);
+    }
+
+    if (!opts.task && !opts.wt) {
+      const allWt = await findWorktrees(parentDir, repoName);
+      const usedNames = new Set<string>();
+      for (const wt of allWt) {
+        const taskPart = wt.name.replace(/^\d+-/, "");
+        let wtWindowName = `${oracle}-${taskPart}`;
+        if (usedNames.has(wtWindowName)) wtWindowName = `${oracle}-${wt.name}`;
+        usedNames.add(wtWindowName);
+        await tmux.newWindow(session, wtWindowName, { cwd: wt.path });
+        await new Promise(r => setTimeout(r, 300));
+        await tmux.sendText(`${session}:${wtWindowName}`, buildCommandInDir(wtWindowName, wt.path, opts.engine));
+        console.log(`\x1b[32m+\x1b[0m window: ${wtWindowName}`);
+      }
+    }
+  } else {
+    await setSessionEnv(session);
+    let preExistingWindows = new Set<string>();
+    try { preExistingWindows = new Set((await tmux.listWindows(session)).map(w => w.name)); } catch { /* ok */ }
+
+    if (!opts.task && !opts.wt) {
+      const allWt = await findWorktrees(parentDir, repoName);
+      if (allWt.length > 0) {
+        const existingWindows = [...preExistingWindows];
+        const usedNames = new Set(existingWindows);
+        for (const wt of allWt) {
+          const taskPart = wt.name.replace(/^\d+-/, "");
+          let wtWindowName = `${oracle}-${taskPart}`;
+          if (usedNames.has(wtWindowName)) {
+            if (existingWindows.includes(wtWindowName)) continue;
+            wtWindowName = `${oracle}-${wt.name}`;
+          }
+          const altName = `${oracle}-${wt.name}`;
+          if (existingWindows.includes(wtWindowName) || existingWindows.includes(altName)) continue;
+          usedNames.add(wtWindowName);
+          await tmux.newWindow(session, wtWindowName, { cwd: wt.path });
+          await new Promise(r => setTimeout(r, 300));
+          await tmux.sendText(`${session}:${wtWindowName}`, buildCommandInDir(wtWindowName, wt.path, opts.engine));
+          console.log(`\x1b[32m↻\x1b[0m respawned: ${wtWindowName}`);
+        }
+      }
+    }
+
+    await new Promise(r => setTimeout(r, cfgTimeout("wakeVerify")));
+    const retried = await ensureSessionRunning(session, preExistingWindows);
+    if (retried > 0) console.log(`\x1b[33m${retried} window(s) retried.\x1b[0m`);
+  }
+
+  const reordered = await restoreTabOrder(session);
+  if (reordered > 0) console.log(`\x1b[36m↻ ${reordered} window(s) reordered to saved positions.\x1b[0m`);
+
+  let targetPath = repoPath;
+  let windowName = `${oracle}-oracle`;
+
+  if (opts.listWt) {
+    const worktrees = await findWorktrees(parentDir, repoName);
+    if (!worktrees.length) { console.log(`\x1b[90mNo worktrees for ${oracle}.\x1b[0m`); }
+    else {
+      console.log(`\n\x1b[36mWorktrees for ${oracle}\x1b[0m (${worktrees.length})\n`);
+      for (const wt of worktrees) console.log(`  \x1b[32m●\x1b[0m ${wt.name}  \x1b[90m${wt.path}\x1b[0m`);
+    }
+    return `${session}:${windowName}`;
+  }
+
+  if (opts.wt || opts.task) {
+    const name = sanitizeBranchName(opts.wt || opts.task!);
+    const worktrees = await findWorktrees(parentDir, repoName);
+    let match: { path: string; name: string } | null = null;
+    if (!opts.fresh) {
+      const resolvedTarget = resolveWorktreeTarget(name, worktrees);
+      switch (resolvedTarget.kind) {
+        case "exact":
+        case "fuzzy":
+          match = resolvedTarget.match;
+          break;
+        case "ambiguous": {
+          const lines = [
+            `\x1b[31m✗\x1b[0m '${name}' is ambiguous — matches ${resolvedTarget.candidates.length} worktrees:`,
+            ...resolvedTarget.candidates.map(c => `\x1b[90m    • ${c.name}\x1b[0m`),
+            `\x1b[90m  use the full name: maw wake ${oracle} --task <exact-worktree>\x1b[0m`,
+          ];
+          throw new Error(lines.join("\n"));
+        }
+        case "none":
+          match = null;
+          break;
+      }
+    }
+
+    if (match) {
+      console.log(`\x1b[33m⚡\x1b[0m reusing worktree: ${match.path}`);
+      targetPath = match.path;
+      windowName = `${oracle}-${name}`;
+    } else {
+      const result = await createWorktree(repoPath, parentDir, repoName, oracle, name, worktrees);
+      targetPath = result.wtPath;
+      windowName = result.windowName;
+    }
+  }
+
+  try {
+    const windows = await tmux.listWindows(session);
+    const nameSuffix = windowName.replace(`${oracle}-`, "");
+    const existingWindow = windows.map(w => w.name).find(w => w === windowName)
+      || windows.map(w => w.name).find(w => new RegExp(`^${oracle}-\\d+-${nameSuffix}$`).test(w));
+    if (existingWindow) {
+      if (opts.prompt) {
+        await tmux.selectWindow(`${session}:${existingWindow}`);
+        const escaped = opts.prompt.replace(/'/g, "'\\''");
+        await tmux.sendText(`${session}:${existingWindow}`, `${buildCommandInDir(existingWindow, targetPath, opts.engine)} -p '${escaped}'`);
+        if (opts.attach) await attachToSession(session);
+        await maybeSplit(`${session}:${existingWindow}`, opts);
+        return `${session}:${existingWindow}`;
+      }
+      // Check if agent is actually alive in the pane
+      const target = `${session}:${existingWindow}`;
+      const infos = await getPaneInfos([target]);
+      const info = infos[target];
+      const agentAlive = info && isAgentCommand(info.command);
+
+      if (!agentAlive) {
+        console.log(`\x1b[33m⚡\x1b[0m '${existingWindow}' in ${session} — agent dead, re-launching...`);
+        await tmux.sendText(target, buildCommandInDir(existingWindow, targetPath, opts.engine));
+        if (opts.attach) {
+          await tmux.selectWindow(target);
+          await attachToSession(session);
+        }
+        await maybeSplit(target, opts);
+        return target;
+      }
+
+      console.log(`\x1b[32m⚡\x1b[0m '${existingWindow}' running in ${session}`);
+      if (!opts.attach && process.stdin.isTTY) {
+        process.stdout.write(`  attach? [y/N] `);
+        const { openSync, readSync, closeSync } = await import("fs");
+        try {
+          const fd = openSync("/dev/tty", "r");
+          const buf = Buffer.alloc(8);
+          const n = readSync(fd, buf, 0, buf.length, null);
+          closeSync(fd);
+          const answer = buf.slice(0, n).toString().trim().toLowerCase();
+          if (answer === "y" || answer === "yes") opts.attach = true;
+        } catch {}
+      }
+      if (opts.attach) {
+        await tmux.selectWindow(target);
+        await attachToSession(session);
+      }
+      await maybeSplit(target, opts);
+      return target;
+    }
+  } catch { /* session might be fresh */ }
+
+  await tmux.newWindow(session, windowName, { cwd: targetPath });
+  await new Promise(r => setTimeout(r, 300));
+  const cmd = buildCommandInDir(windowName, targetPath, opts.engine);
+  if (opts.prompt) {
+    const escaped = opts.prompt.replace(/'/g, "'\\''");
+    await tmux.sendText(`${session}:${windowName}`, `${cmd} -p '${escaped}'`);
+  } else {
+    await tmux.sendText(`${session}:${windowName}`, cmd);
+  }
+
+  console.log(`\x1b[32m✅\x1b[0m woke '${windowName}' in ${session} → ${targetPath}`);
+  if (opts.attach) await attachToSession(session);
+
+  await maybeSplit(`${session}:${windowName}`, opts);
+
+  takeSnapshot("wake").catch(() => {});
+  return `${session}:${windowName}`;
+}
+

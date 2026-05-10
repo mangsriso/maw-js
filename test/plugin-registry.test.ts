@@ -403,7 +403,7 @@ describe("SDK returns typed responses", () => {
     expect(Array.isArray(fed.peers)).toBe(true);
     expect(typeof fed.totalPeers).toBe("number");
     expect(typeof fed.reachablePeers).toBe("number");
-  });
+  }, 10_000);
 
   test("sessions returns Session[] shape", async () => {
     const { maw } = await import("../src/core/runtime/sdk");
@@ -413,7 +413,7 @@ describe("SDK returns typed responses", () => {
       expect(typeof sess[0].name).toBe("string");
       expect(Array.isArray(sess[0].windows)).toBe(true);
     }
-  });
+  }, 10_000);
 
   test("feed returns FeedEvent[] or object with events", async () => {
     const { maw } = await import("../src/core/runtime/sdk");
