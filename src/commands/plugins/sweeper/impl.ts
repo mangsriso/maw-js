@@ -8,7 +8,7 @@
  * Static workers (lifecycle: "static" in fleet config) are never touched.
  */
 
-import { readdirSync, readFileSync, statSync } from "fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { join } from "path";
 import { loadConfig } from "../../../config";
 import { scanWorktrees, type WorktreeInfo } from "../../../core/fleet/worktrees-scan";
@@ -116,6 +116,23 @@ export interface SweepResult {
   details: { name: string; reason: string; log: string[] }[];
 }
 
+/**
+ * A real git worktree has a `.git` FILE (gitdir pointer). scanWorktrees can
+ * over-match plain directories (e.g. `*​/agents/*` in /learn'd repos) that are
+ * NOT worktrees — cleanupWorktree fails on them ("not a working tree") and the
+ * failed attempt was being miscounted as a successful clean. Filter them out
+ * before any cleanup so the count stays honest and no stray tmux window is
+ * fuzzy-killed for a phantom path.
+ */
+function isRealWorktree(wtPath: string): boolean {
+  try {
+    const gitPath = join(wtPath, ".git");
+    return existsSync(gitPath) && statSync(gitPath).isFile();
+  } catch {
+    return false;
+  }
+}
+
 export async function cmdSweep(opts?: { dryRun?: boolean }): Promise<SweepResult> {
   const config = loadConfig();
   const cleanup = config.autoCleanup;
@@ -157,6 +174,12 @@ export async function cmdSweep(opts?: { dryRun?: boolean }): Promise<SweepResult
   for (const wt of worktrees) {
     if (isStaticWorker(wt, staticNames)) {
       result.skippedStatic++;
+      continue;
+    }
+
+    // Skip over-matched non-worktree dirs (scanWorktrees catches */agents/* in
+    // learned repos) — they fail cleanup and would inflate the cleaned count.
+    if (!isRealWorktree(wt.path)) {
       continue;
     }
 
