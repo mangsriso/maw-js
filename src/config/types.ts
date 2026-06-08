@@ -57,9 +57,19 @@ export interface MawLimits {
   maxConcurrentAgents?: number;
 }
 
+export interface AutoCleanupConfig {
+  enabled: boolean;
+  idleTimeout: string;   // e.g. "2h" — no feed activity → cleanup
+  maxAge: string;        // e.g. "24h" — absolute max lifetime
+  sweepInterval: string; // e.g. "5m" — check frequency
+  notify?: boolean;      // Telegram notification on cleanup
+}
+
 export interface MawConfig {
   host: string;
   port: number;
+  /** Auto-cleanup sweeper config (Wednesday fork) — idle/maxAge worktree GC. */
+  autoCleanup?: AutoCleanupConfig;
   /**
    * API server bind address (#713). When present, the HTTP/WS server binds to
    * this address instead of deriving it from `host`. This separates the

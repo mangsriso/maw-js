@@ -121,6 +121,11 @@ function validateExtFields(
     }
   }
 
+  // autoCleanup: sweeper config (Wednesday fork) — passthrough whole object or it's stripped
+  if ("autoCleanup" in raw && raw.autoCleanup && typeof raw.autoCleanup === "object" && !Array.isArray(raw.autoCleanup)) {
+    result.autoCleanup = raw.autoCleanup;
+  }
+
   // migrations: one-shot migration markers
   if ("migrations" in raw) {
     if (raw.migrations && typeof raw.migrations === "object" && !Array.isArray(raw.migrations)) {

@@ -6,6 +6,7 @@ import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { serveStatic } from "hono/bun";
 import { api } from "../api";
+import { startSweeper } from "../plugins/builtin/sweeper-daemon";
 import { feedBuffer, feedListeners } from "../api/feed";
 import { mountViews } from "../views/index";
 import { setupTriggerListener } from "./runtime/trigger-listener";
@@ -154,6 +155,9 @@ export async function startServer(port = +(process.env.MAW_PORT || loadConfig().
       console.warn(`[engine-plugin] event dispatch failed: ${err instanceof Error ? err.message : String(err)}`);
     });
   });
+
+  // Auto-cleanup sweeper daemon (Wednesday fork)
+  startSweeper().catch(err => console.error("[sweeper] startup failed:", err));
 
   // Plugin system — built-in + user plugins
   try {
