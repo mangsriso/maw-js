@@ -1,7 +1,7 @@
 import { hostExec, tmux, restoreTabOrder, takeSnapshot, getPaneInfos, isAgentCommand } from "../../sdk";
 import { resolve } from "path";
 import { ghqFind } from "../../core/ghq";
-import { buildCommandInDir, cfgTimeout, loadConfig, saveConfig } from "../../config";
+import { buildCommandInDir, cfgTimeout, loadConfig, saveConfig, prepareCodexLaunch } from "../../config";
 import { resolveWorktreeTarget } from "../../core/matcher/resolve-target";
 import { normalizeWorktreeLayout, type WorktreeLayout } from "../../core/fleet/worktree-layout";
 import { normalizeTarget } from "../../core/matcher/normalize-target";
@@ -74,6 +74,10 @@ export const _wtPicker = {
 async function respawnPaneWithCommand(target: string, command: string): Promise<boolean> {
   const runner = (tmux as unknown as { run?: (subcommand: string, ...args: Array<string | number>) => Promise<string> }).run;
   if (typeof runner !== "function") return false;
+  // No -c needed: respawn-pane reuses the pane's start-dir (set correctly by the
+  // original newSession/newWindow), and codex canonicalizes its cwd before its
+  // trust check — so the trust write in prepareCodexLaunch is what prevents the
+  // hang, not the pane cwd. Keeping this byte-identical to upstream behavior.
   await runner.call(tmux, "respawn-pane", "-k", "-t", target, command);
   return true;
 }
@@ -370,9 +374,10 @@ async function restoreSnapshotWindows(
 ): Promise<number> {
   const planned = planSnapshotRestoreWindows(oracle, snapshotSession, existingWindows, worktrees, repoPath);
   for (const win of planned) {
-    await tmux.newWindow(session, win.windowName, { cwd: win.cwd });
+    const winCwd = await prepareCodexLaunch(win.windowName, win.cwd, engine, true);
+    await tmux.newWindow(session, win.windowName, { cwd: winCwd });
     await new Promise(r => setTimeout(r, 300));
-    await tmux.sendText(`${session}:${win.windowName}`, buildCommandInDir(win.windowName, win.cwd, engine));
+    await tmux.sendText(`${session}:${win.windowName}`, buildCommandInDir(win.windowName, winCwd, engine));
     existingWindows.add(win.windowName);
     const label = win.source === "worktree" ? "worktree" : "repo";
     console.log(`\x1b[36m↻\x1b[0m snapshot window: ${win.windowName}  \x1b[90m${label}: ${win.cwd}\x1b[0m`);
@@ -800,13 +805,14 @@ export async function cmdWake(oracle: string, opts: WakeOptions): Promise<string
     // "m5-oracle") so it's distinct from any unrelated sub-token sessions
     // and immediately disambiguates future `maw wake` calls.
     session = await chooseWakeSessionName(oracle, opts.urlRepoName);
-    await tmux.newSession(session, { window: mainWindowName, cwd: repoPath });
+    const mainLaunchCwd = await prepareCodexLaunch(mainWindowName, repoPath, opts.engine, !opts.incubate);
+    await tmux.newSession(session, { window: mainWindowName, cwd: mainLaunchCwd });
     await retryFreshSessionTmuxStep(session, "set session environment", () => setSessionEnv(session), {
       hasSession: tmux.hasSession,
     });
     await new Promise(r => setTimeout(r, 300));
     await retryFreshSessionTmuxStep(session, "launch main window", () =>
-      tmux.sendText(`${session}:${mainWindowName}`, buildCommandInDir(mainWindowName, repoPath, opts.engine))
+      tmux.sendText(`${session}:${mainWindowName}`, buildCommandInDir(mainWindowName, mainLaunchCwd, opts.engine))
     , {
       hasSession: tmux.hasSession,
     });
@@ -841,9 +847,10 @@ export async function cmdWake(oracle: string, opts: WakeOptions): Promise<string
     if (!foreignSession && !opts.task && !opts.wt && !opts.noRehydrate) {
       const allWt = await findWorktrees(parentDir, repoName);
       for (const wt of planRehydrateWorktreeWindows(oracle, allWt, [...existingWindows])) {
-        await tmux.newWindow(session, wt.windowName, { cwd: wt.path });
+        const wtCwd = await prepareCodexLaunch(wt.windowName, wt.path, opts.engine, !opts.incubate);
+        await tmux.newWindow(session, wt.windowName, { cwd: wtCwd });
         await new Promise(r => setTimeout(r, 300));
-        await tmux.sendText(`${session}:${wt.windowName}`, buildCommandInDir(wt.windowName, wt.path, opts.engine));
+        await tmux.sendText(`${session}:${wt.windowName}`, buildCommandInDir(wt.windowName, wtCwd, opts.engine));
         existingWindows.add(wt.windowName);
         console.log(`\x1b[32m+\x1b[0m window: ${wt.windowName}`);
       }
@@ -871,9 +878,10 @@ export async function cmdWake(oracle: string, opts: WakeOptions): Promise<string
         const existingWindows = [...preExistingWindows];
         const liveTileRoles = await getLiveTileRoles(session);
         for (const wt of planRehydrateWorktreeWindows(oracle, allWt, existingWindows, liveTileRoles)) {
-          await tmux.newWindow(session, wt.windowName, { cwd: wt.path });
+          const wtCwd = await prepareCodexLaunch(wt.windowName, wt.path, opts.engine, !opts.incubate);
+          await tmux.newWindow(session, wt.windowName, { cwd: wtCwd });
           await new Promise(r => setTimeout(r, 300));
-          await tmux.sendText(`${session}:${wt.windowName}`, buildCommandInDir(wt.windowName, wt.path, opts.engine));
+          await tmux.sendText(`${session}:${wt.windowName}`, buildCommandInDir(wt.windowName, wtCwd, opts.engine));
           preExistingWindows.add(wt.windowName);
           console.log(`\x1b[32m↻\x1b[0m respawned: ${wt.windowName}`);
         }
@@ -993,7 +1001,8 @@ export async function cmdWake(oracle: string, opts: WakeOptions): Promise<string
       if (opts.prompt) {
         await tmux.selectWindow(target);
         const escaped = opts.prompt.replace(/'/g, "'\\''");
-        const promptCommand = `${buildCommandInDir(existingWindow, targetPath, opts.engine)} -p '${escaped}'`;
+        const promptCwd = await prepareCodexLaunch(existingWindow, targetPath, opts.engine, !opts.incubate);
+        const promptCommand = `${buildCommandInDir(existingWindow, promptCwd, opts.engine)} -p '${escaped}'`;
         if (opts.engine) {
           if (!(await respawnPaneWithCommand(target, promptCommand))) {
             await tmux.sendText(target, promptCommand);
@@ -1014,7 +1023,8 @@ export async function cmdWake(oracle: string, opts: WakeOptions): Promise<string
 
       if (!agentAlive) {
         console.log(`\x1b[33m⚡\x1b[0m '${existingWindow}' in ${session} — agent dead, re-launching...`);
-        await tmux.sendText(target, buildCommandInDir(existingWindow, targetPath, opts.engine));
+        const relaunchCwd = await prepareCodexLaunch(existingWindow, targetPath, opts.engine, !opts.incubate);
+        await tmux.sendText(target, buildCommandInDir(existingWindow, relaunchCwd, opts.engine));
         if (opts.attach) {
           await tmux.selectWindow(target);
           await attachToSession(session);
@@ -1027,7 +1037,8 @@ export async function cmdWake(oracle: string, opts: WakeOptions): Promise<string
 
       if (opts.engine) {
         console.log(`\x1b[33m⚡\x1b[0m '${existingWindow}' in ${session} — switching engine to ${opts.engine}...`);
-        const command = buildCommandInDir(existingWindow, targetPath, opts.engine);
+        const switchCwd = await prepareCodexLaunch(existingWindow, targetPath, opts.engine, !opts.incubate);
+        const command = buildCommandInDir(existingWindow, switchCwd, opts.engine);
         if (!(await respawnPaneWithCommand(target, command))) {
           await tmux.sendText(target, command);
         }
@@ -1072,9 +1083,10 @@ export async function cmdWake(oracle: string, opts: WakeOptions): Promise<string
   // spawning it (no-op when limits.maxConcurrentAgents is 0).
   await assertAgentCapacity(oracle);
 
-  await tmux.newWindow(session, windowName, { cwd: targetPath });
+  const finalCwd = await prepareCodexLaunch(windowName, targetPath, opts.engine, !opts.incubate);
+  await tmux.newWindow(session, windowName, { cwd: finalCwd });
   await new Promise(r => setTimeout(r, 300));
-  const cmd = buildCommandInDir(windowName, targetPath, opts.engine);
+  const cmd = buildCommandInDir(windowName, finalCwd, opts.engine);
   if (opts.prompt) {
     const escaped = opts.prompt.replace(/'/g, "'\\''");
     await tmux.sendText(`${session}:${windowName}`, `${cmd} -p '${escaped}'`);

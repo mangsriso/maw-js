@@ -71,6 +71,13 @@ export interface MawConfig {
   /** Auto-cleanup sweeper config (Wednesday fork) — idle/maxAge worktree GC. */
   autoCleanup?: AutoCleanupConfig;
   /**
+   * Auto-trust the launch directory of codex workers in ~/.codex/config.toml so
+   * interactive codex (0.13x) doesn't hang at its directory-trust prompt
+   * (Wednesday fork). Default true; never applied to `--incubate` clones. Set
+   * false to fully disable (codex will then prompt and hang on untrusted paths).
+   */
+  codexAutoTrust?: boolean;
+  /**
    * API server bind address (#713). When present, the HTTP/WS server binds to
    * this address instead of deriving it from `host`. This separates the
    * "listen on all interfaces for federation" concern from the "outbound

@@ -363,7 +363,14 @@ export async function findWorktrees(
   return outs
     .join("\n")
     .split("\n")
+    .map(p => p.trim())
     .filter(Boolean)
+    // Defense-in-depth: a real worktree path is absolute. The root cause of
+    // garbage output (a BASH_ENV shell shim reformatting `find`/`ls` inside
+    // hostExec — observed: rtk emitting the relative "0 for '*'") is fixed in
+    // hostExec by stripping BASH_ENV; this guard drops any non-absolute line so a
+    // malformed token can never become a phantom worktree window in $HOME.
+    .filter(path => path.startsWith("/"))
     .filter(path => {
       if (seen.has(path)) return false;
       seen.add(path);

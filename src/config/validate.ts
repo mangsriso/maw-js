@@ -111,6 +111,7 @@ export function validateConfigShape(config: unknown): string[] {
   if (c.oracleUrl !== undefined && typeof c.oracleUrl !== "string") errors.push("oracleUrl must be a string");
   if (c.tmuxSocket !== undefined && typeof c.tmuxSocket !== "string") errors.push("tmuxSocket must be a string");
   if (c.federationToken !== undefined && typeof c.federationToken !== "string") errors.push("federationToken must be a string");
+  if (c.codexAutoTrust !== undefined && typeof c.codexAutoTrust !== "boolean") errors.push("codexAutoTrust must be a boolean");
 
   if (c.env !== undefined) {
     if (!c.env || typeof c.env !== "object" || Array.isArray(c.env)) {

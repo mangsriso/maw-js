@@ -1,7 +1,7 @@
 import { existsSync } from "fs";
 import { join } from "path";
 import { tmux, saveTabOrder, restoreTabOrder } from "../../sdk";
-import { buildCommand, getEnvVars } from "../../config";
+import { buildCommand, getEnvVars, prepareCodexLaunch } from "../../config";
 import { getGhqRoot } from "../../config/ghq-root";
 import { ensureSessionRunning } from "./wake";
 import { countDisabledFleetFiles, loadFleet } from "./fleet-load";
@@ -86,7 +86,8 @@ export async function cmdWakeAll(opts: { kill?: boolean; all?: boolean; resume?:
           `Check ghqRoot resolution (config.ghqRoot, $GHQ_ROOT, \`ghq root\`) and fleet config repo "${first.repo}".`,
         );
       }
-      await tmux.newSession(sess.name, { window: first.name, cwd: firstPath });
+      const firstCwd = await prepareCodexLaunch(first.name, firstPath, undefined, true);
+      await tmux.newSession(sess.name, { window: first.name, cwd: firstCwd });
       await pinSessionWide(sess.name);
       for (const [key, val] of Object.entries(getEnvVars())) {
         await tmux.setEnvironment(sess.name, key, val);
@@ -111,7 +112,8 @@ export async function cmdWakeAll(opts: { kill?: boolean; all?: boolean; resume?:
           continue;
         }
         try {
-          await tmux.newWindow(sess.name, win.name, { cwd: winPath });
+          const winCwd = await prepareCodexLaunch(win.name, winPath, undefined, true);
+          await tmux.newWindow(sess.name, win.name, { cwd: winCwd });
           await pinWindowWide(`${sess.name}:${win.name}`);
           if (!sess.skip_command) {
             await new Promise(r => setTimeout(r, 300));

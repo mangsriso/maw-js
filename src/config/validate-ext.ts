@@ -61,6 +61,17 @@ function validateExtFields(
     }
   }
 
+  // codexAutoTrust: boolean (Wednesday fork). Without this passthrough the field
+  // is silently stripped, making the off-switch unreachable via maw.config.json
+  // (same class of bug as allowPeersWithoutToken above).
+  if ("codexAutoTrust" in raw) {
+    if (typeof raw.codexAutoTrust === "boolean") {
+      result.codexAutoTrust = raw.codexAutoTrust;
+    } else {
+      warn("codexAutoTrust", "must be a boolean");
+    }
+  }
+
   // pin: string if present
   if ("pin" in raw) {
     if (typeof raw.pin === "string") {

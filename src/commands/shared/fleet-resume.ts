@@ -1,6 +1,6 @@
 import { join } from "path";
 import { hostExec as ssh, tmux } from "../../sdk";
-import { buildCommand } from "../../config";
+import { buildCommand, prepareCodexLaunch } from "../../config";
 import { getGhqRoot } from "../../config/ghq-root";
 import type { FleetSession } from "./fleet-load";
 import { pinWindowWide } from "./wake-pane-size";
@@ -145,7 +145,8 @@ export async function respawnMissingWorktrees(sessions: FleetSession[], deps: Pa
 
         usedNames.add(windowName);
         try {
-          await io.tmux.newWindow(sess.name, windowName, { cwd: wtPath });
+          const wtCwd = await prepareCodexLaunch(windowName, wtPath, undefined, true);
+          await io.tmux.newWindow(sess.name, windowName, { cwd: wtCwd });
           await io.pinWindowWide(`${sess.name}:${windowName}`);
           await io.sleep(300);
           await io.tmux.sendText(`${sess.name}:${windowName}`, io.buildCommand(windowName));

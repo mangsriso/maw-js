@@ -104,11 +104,22 @@ export function createSshTransport(overrides: Partial<SshDeps> = {}): SshTranspo
     const transport: HostExecTransport = local ? "local" : "ssh";
     const args = local ? ["bash", "-c", cmd] : ["ssh", host, cmd];
     const env = io.env();
+    // Strip BASH_ENV for maw's own local `bash -c` commands. A user shell wrapper
+    // loaded via BASH_ENV (e.g. the rtk shim) reformats `find`/`ls`/`git` output,
+    // which corrupts what maw parses internally — observed: findWorktrees getting a
+    // phantom "0 for '*'" line → a bogus worktree window launched in $HOME. Spawned
+    // workers run in their own tmux panes (env from the tmux server), so they keep
+    // BASH_ENV and rtk stays active for them; only maw's parsing is de-shimmed.
+    let localEnv: Record<string, string | undefined> | undefined;
+    if (local) {
+      localEnv = { ...process.env, ...env, PATH: pathWithCommonLocalBins(env) };
+      delete localEnv.BASH_ENV;
+    }
     const proc = io.spawn(args, {
       stdout: "pipe",
       stderr: "pipe",
       windowsHide: true,
-      env: local ? { ...process.env, ...env, PATH: pathWithCommonLocalBins(env) } : undefined,
+      env: localEnv,
     });
     const [text, err, code] = await Promise.all([
       new Response(proc.stdout).text(),
