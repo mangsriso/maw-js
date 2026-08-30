@@ -106,6 +106,7 @@ mock.module(join(root, "src/config"), () => {
     ...mockConfigModule(() => ({ node: "test-node", commands: {} })),
     buildCommand: (name: string) => `run ${name}`,
     getEnvVars: () => ({ MAW_TEST_ENV: "yes" }),
+    prepareCodexLaunch: async (_name: string, cwd: string) => cwd,
   };
 });
 

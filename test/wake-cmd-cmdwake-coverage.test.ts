@@ -1246,6 +1246,7 @@ describe("cmdWake main-suite coverage", () => {
       target: "10-mawjs:mawjs-oracle",
       text: `cd ${repoPath} && codex --agent mawjs-oracle`,
     });
+    expect(sendTextCalls.filter(call => call.target === "10-mawjs:mawjs-oracle")).toHaveLength(1);
     expect(newWindowCalls).toContainEqual({
       session: "10-mawjs",
       name: "mawjs-alpha",
@@ -1284,6 +1285,7 @@ describe("cmdWake main-suite coverage", () => {
       target: "63-mawjs:mawjs-oracle",
       text: `cd ${repoPath} && codex --agent mawjs-oracle`,
     });
+    expect(sendTextCalls.filter(call => call.target === "63-mawjs:mawjs-oracle")).toHaveLength(1);
     expect(attachCalls).toEqual(["63-mawjs"]);
   });
 
@@ -1493,15 +1495,17 @@ describe("cmdWake main-suite coverage", () => {
     });
   });
 
-  test("creates a wake-bud worktree, stamps lineage, emits birth signal, and launches with prompt", async () => {
+  test("rejects task prompts, then creates a wake-bud worktree and stamps lineage", async () => {
     branchName = "feature/fix-a";
+
+    await expect(cmdWake("mawjs", { task: "Fix A", prompt: "unsupported" })).rejects.toThrow("--prompt cannot be combined");
+    expect(createdWorktrees).toEqual([]);
 
     const { result } = await captureLogs(() =>
       cmdWake("mawjs", {
         task: "Fix A",
         bud: true,
         signalOnBirth: true,
-        prompt: "hello oracle",
         engine: "codex",
       }),
     );
@@ -1518,7 +1522,7 @@ describe("cmdWake main-suite coverage", () => {
     });
     expect(sendTextCalls).toContainEqual({
       target: "54-mawjs:mawjs-fix-a",
-      text: `cd ${wtPath} && codex --agent mawjs-fix-a -p 'hello oracle'`,
+      text: `cd ${wtPath} && codex --agent mawjs-fix-a`,
     });
     expect(writeSignalCalls).toEqual([
       {

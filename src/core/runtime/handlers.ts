@@ -95,22 +95,46 @@ function buildSpawnCmd(data: { target?: string; command?: string; cwd?: string }
   const oracle = extractOracleName(target);
   const baseCmd = data.command || buildCommand(oracle);
   const cwd = data.cwd || resolveTargetCwd(target);
-  return cwd ? `cd ${shellQuote(cwd)} && ${baseCmd}` : baseCmd;
+  return baseCmd.startsWith("SDA_CODEX_MCP_HOME='") ? baseCmd : cwd ? `cd ${shellQuote(cwd)} && ${baseCmd}` : baseCmd;
 }
+const sendSpawnCmd = async (target: string, cmd: string, requiredCwd?: string): Promise<void> => {
+  if (cmd.startsWith("SDA_CODEX_MCP_HOME='")) {
+    await tmux.sendText(target, cmd, { requiredCwd });
+  } else {
+    await sendKeys(target, cmd + "\r");
+  }
+};
 
 const wake: Handler = (ws, data) => {
   const cmd = buildSpawnCmd(data);
-  runAction(ws, "wake", data.target, () => sendKeys(data.target, cmd + "\r"));
+  const requiredCwd = data.cwd || resolveTargetCwd(data.target) || undefined;
+  runAction(ws, "wake", data.target, () => sendSpawnCmd(data.target, cmd, requiredCwd));
 };
 
 const restart: Handler = (ws, data) => {
   const cmd = buildSpawnCmd(data);
+  const requiredCwd = data.cwd || resolveTargetCwd(data.target) || undefined;
   runAction(ws, "restart", data.target, async () => {
+    if (cmd.startsWith("SDA_CODEX_MCP_HOME='")) {
+      const prepared = await tmux.prepareText(data.target, cmd, { requiredCwd });
+      try {
+        await prepared.authorize();
+        await sendKeys(data.target, "\x03");
+        await new Promise(r => setTimeout(r, 2000));
+        await sendKeys(data.target, "\x03");
+        await new Promise(r => setTimeout(r, 500));
+        await prepared.send();
+      } catch (error) {
+        await prepared.abort();
+        throw error;
+      }
+      return;
+    }
     await sendKeys(data.target, "\x03"); // Ctrl+C
     await new Promise(r => setTimeout(r, 2000));
     await sendKeys(data.target, "\x03"); // Ctrl+C again (in case first was caught)
     await new Promise(r => setTimeout(r, 500));
-    await sendKeys(data.target, cmd + "\r");
+    await sendSpawnCmd(data.target, cmd, requiredCwd);
   });
 };
 

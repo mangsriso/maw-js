@@ -69,6 +69,7 @@ mock.module(import.meta.resolve("../../src/sdk"), () => ({
 mock.module(import.meta.resolve("../../src/config"), () => ({
   buildCommand: (name: string) => `run-${name}`,
   getEnvVars: () => ({ A: "1", B: "2" }),
+  prepareCodexLaunch: async (_name: string, cwd: string) => cwd,
 }));
 
 mock.module(import.meta.resolve("../../src/config/ghq-root"), () => ({

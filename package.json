@@ -11,10 +11,11 @@
     "maw": "./src/cli.ts"
   },
   "scripts": {
-    "build": "bun build src/cli.ts --outfile dist/maw --target=bun --minify --external @eclipse-zenoh/zenoh-ts",
+    "build": "bun run build:maw-control && bun build src/cli.ts --outfile dist/maw --target=bun --minify --external @eclipse-zenoh/zenoh-ts",
+    "build:maw-control": "bun build src/integration/maw-control.ts --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig --no-compile-autoload-tsconfig --no-compile-autoload-package-json --reject-unresolved --packages bundle --outfile dist/maw-control --target=bun --minify",
     "deploy": "bun run build && bun src/cli.ts fleet sync && pm2 restart maw",
     "dev": "pm2 start ecosystem.config.cjs",
-    "test": "bash scripts/test-default-safe.sh",
+    "test": "bun run build:maw-control && bash scripts/test-default-safe.sh",
     "test:default:safe": "bash scripts/test-default-safe.sh",
     "test:isolated": "bash scripts/test-isolated.sh",
     "test:isolated:random": "bash scripts/test-isolated.sh --randomize",
@@ -69,6 +70,7 @@
     "./config": "./src/config.ts",
     "./config/ghq-root": "./src/config/ghq-root.ts",
     "./config/types": "./src/config/types.ts",
+    "./config/transaction": "./src/config/transaction.ts",
     "./schemas": "./src/lib/schemas.ts",
     "./cli/parse-args": "./src/cli/parse-args.ts",
     "./plugin/types": "./src/plugin/types.ts",

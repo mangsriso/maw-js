@@ -1,17 +1,10 @@
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "fs";
-import { dirname } from "path";
+import { copyFileSync, existsSync } from "fs";
 import type { MawConfig } from "maw-js/config/types";
+import { replaceWholeConfigTransactional } from "../../../config/transaction";
 
 /** Atomically write JSON config; throws EEXIST if `wx` flag and file exists. */
 export function writeConfigAtomic(filePath: string, config: Partial<MawConfig>, overwrite: boolean): void {
-  mkdirSync(dirname(filePath), { recursive: true });
-  const body = JSON.stringify(config, null, 2) + "\n";
-  if (overwrite) {
-    writeFileSync(filePath, body, "utf-8");
-    return;
-  }
-  // wx mode: fail if exists
-  writeFileSync(filePath, body, { encoding: "utf-8", flag: "wx" });
+  replaceWholeConfigTransactional(filePath, config as Record<string, unknown>, { overwrite });
 }
 
 export function backupConfig(filePath: string): string {

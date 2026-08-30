@@ -3,7 +3,7 @@ import { listSessions, capture, sendKeys, selectWindow } from "../core/transport
 import { checkPaneIdle } from "../commands/shared/comm-send";
 import { findWindow } from "../core/runtime/find-window";
 import { getAggregatedSessions, findPeerForTarget, sendKeysToPeer, sendKeysToPeerDetailed } from "../core/transport/peers";
-import { loadConfig } from "../config";
+import { loadConfig, loadConfigFresh } from "../config";
 import { curlFetch } from "../core/transport/curl-fetch";
 import { resolveTarget } from "../core/routing";
 import { processMirror } from "../lib/process-mirror";
@@ -63,7 +63,7 @@ function defaults(deps: SessionsApiDeps) {
     findPeerForTarget: deps.findPeerForTarget ?? findPeerForTarget,
     sendKeysToPeer: deps.sendKeysToPeer ?? sendKeysToPeer,
     sendKeysToPeerDetailed: deps.sendKeysToPeerDetailed ?? sendKeysToPeerDetailed,
-    loadConfig: deps.loadConfig ?? loadConfig,
+    loadConfig: deps.loadConfig ?? loadConfigFresh,
     curlFetch: deps.curlFetch ?? curlFetch,
     resolveTarget: deps.resolveTarget ?? resolveTarget,
     processMirror: deps.processMirror ?? processMirror,

@@ -84,6 +84,17 @@ await mock.module(import.meta.resolve("../../src/config/fleet-merge"), () => ({
   },
 }));
 
+await mock.module(import.meta.resolve("../../src/config/transaction"), () => ({
+  mutateConfigTransactional: (path: string, mutate: (fresh: Record<string, unknown>) => Record<string, unknown>) => {
+    const current = JSON.parse(rawConfigText);
+    const next = mutate(current);
+    writeCalls.push({ path, data: `${JSON.stringify(next, null, 2)}\n` });
+    if (writeError) throw writeError;
+    rawConfigText = `${JSON.stringify(next, null, 2)}\n`;
+    return next;
+  },
+}));
+
 const config = await import("../../src/config/load.ts?config-load-second-pass");
 
 beforeEach(() => {

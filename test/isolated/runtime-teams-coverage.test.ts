@@ -17,6 +17,8 @@ let sendKeyCalls: Array<{ target: string; text: string }> = [];
 let sendReject: Error | null = null;
 let paneCommand: string | Error = "claude";
 let killedWindows: string[] = [];
+let sendTextCalls: Array<{ target: string; text: string }> = [];
+let strictCwdCalls: Array<{ target: string; requiredCwd?: string }> = [];
 let tmuxRunResult = "";
 let tmuxRunThrow: Error | null = null;
 
@@ -39,6 +41,19 @@ mock.module(sshPath, () => ({
 
 mock.module(tmuxPath, () => ({
   tmux: {
+    sendText: async (target: string, text: string, options: { requiredCwd?: string } = {}) => {
+      strictCwdCalls.push({ target, requiredCwd: options.requiredCwd });
+      if (target === "known:0" && options.requiredCwd !== join(tmpHome, "known-oracle")) throw new Error("SDA-MCP-E-TMUX-AMBIGUOUS pane cwd mismatch");
+      sendTextCalls.push({ target, text });
+    },
+    prepareText: async (target: string, text: string, options: { requiredCwd?: string } = {}) => ({
+      authorize: async () => {
+        strictCwdCalls.push({ target, requiredCwd: options.requiredCwd });
+        if (target === "known:0" && options.requiredCwd !== join(tmpHome, "known-oracle")) throw new Error("SDA-MCP-E-TMUX-AMBIGUOUS pane cwd mismatch");
+      },
+      send: async () => { sendTextCalls.push({ target, text }); },
+      abort: async () => {},
+    }),
     killWindow: async (target: string) => {
       killedWindows.push(target);
     },
@@ -120,6 +135,8 @@ beforeEach(() => {
   sendReject = null;
   paneCommand = "claude";
   killedWindows = [];
+  sendTextCalls = [];
+  strictCwdCalls = [];
   tmuxRunResult = "";
   tmuxRunThrow = null;
   resetHome();
@@ -202,6 +219,31 @@ describe("runtime websocket handlers", () => {
       { target: "plain:0", text: "custom-cmd\r" },
     ]);
     expect(sent.map(s => JSON.parse(s).type)).toContain("action-ok");
+  });
+
+  test("strict websocket wake and restart preserve the route through tmux.sendText", async () => {
+    const { handlers } = makeEngine(); const { ws } = makeWs();
+    const route = "SDA_CODEX_MCP_HOME='/tmp/i' PATH='/tmp/i/bin':\"${PATH-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}\" codex -a never -s workspace-write";
+    await handlers.get("wake")!(ws, { target: "known:0", command: route }, {});
+    const restart = handlers.get("restart")!(ws, { target: "known:0", command: route }, {});
+    await new Promise(resolve => setTimeout(resolve, 2510)); await restart;
+    expect(sendTextCalls).toEqual([{ target: "known:0", text: route }, { target: "known:0", text: route }]);
+    expect(strictCwdCalls).toEqual([
+      { target: "known:0", requiredCwd: join(tmpHome, "known-oracle") },
+      { target: "known:0", requiredCwd: join(tmpHome, "known-oracle") },
+    ]);
+    expect(sendKeyCalls.filter(call => call.text.includes("SDA_CODEX"))).toEqual([]);
+  });
+
+  test("strict websocket cwd mismatch fails before restart process mutation", async () => {
+    const { handlers } = makeEngine(); const { ws, sent } = makeWs();
+    const route = "SDA_CODEX_MCP_HOME='/tmp/i' PATH='/tmp/i/bin':\"${PATH-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}\" codex -a never -s workspace-write";
+    const before = sendKeyCalls.length;
+    await handlers.get("restart")!(ws, { target: "known:0", command: route, cwd: "/different" }, {});
+    await Bun.sleep(10);
+    expect(sendKeyCalls).toHaveLength(before);
+    expect(sendTextCalls).toEqual([]);
+    expect(JSON.parse(sent.at(-1)!)).toEqual({ type: "error", error: "SDA-MCP-E-TMUX-AMBIGUOUS pane cwd mismatch" });
   });
 });
 

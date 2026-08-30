@@ -54,6 +54,13 @@ let lineageWrites: any[] = [];
 let birthSignalWrites: any[] = [];
 let parseWakeTargetReturn: null | { slug: string; oracle: string } = null;
 let ghqFindReturn: string | null = null;
+let preparedAuthority: string | undefined;
+let prepareTextError: Error | null = null;
+let authorizeTextError: Error | null = null;
+let preparedAbortCalls = 0;
+let preparedSendCalls = 0;
+let observedPaneCwd = repoPath;
+let requiredCwdCalls: Array<{ kind: "send" | "prepare"; target: string; requiredCwd?: string }> = [];
 
 function resetState(): void {
   logs = [];
@@ -103,6 +110,13 @@ function resetState(): void {
   birthSignalWrites = [];
   parseWakeTargetReturn = null;
   ghqFindReturn = null;
+  preparedAuthority = undefined;
+  prepareTextError = null;
+  authorizeTextError = null;
+  preparedAbortCalls = 0;
+  preparedSendCalls = 0;
+  observedPaneCwd = repoPath;
+  requiredCwdCalls = [];
 }
 
 async function captureLogs<T>(fn: () => Promise<T> | T): Promise<T> {
@@ -157,8 +171,28 @@ mock.module(import.meta.resolve("../../src/sdk"), () => ({
     newWindow: async (session: string, window: string, opts: any) => {
       newWindows.push({ session, window, opts });
     },
-    sendText: async (target: string, text: string) => {
+    sendText: async (target: string, text: string, options: { integratedReadonlyAuthority?: string; requiredCwd?: string } = {}) => {
+      requiredCwdCalls.push({ kind: "send", target, requiredCwd: options.requiredCwd });
+      if (text.startsWith("SDA_CODEX_MCP_HOME='") && options.requiredCwd !== observedPaneCwd) {
+        throw new Error("SDA-MCP-E-TMUX-AMBIGUOUS pane cwd mismatch");
+      }
       sentText.push({ target, text });
+      return text.startsWith("SDA_CODEX_MCP_HOME='") ? "a".repeat(32) : undefined;
+    },
+    prepareText: async (target: string, text: string, options: { integratedReadonlyAuthority?: string; requiredCwd?: string }) => {
+      preparedAuthority = options.integratedReadonlyAuthority;
+      requiredCwdCalls.push({ kind: "prepare", target, requiredCwd: options.requiredCwd });
+      if (prepareTextError) throw prepareTextError;
+      if (text.startsWith("SDA_CODEX_MCP_HOME='") && options.requiredCwd !== observedPaneCwd) {
+        throw new Error("SDA-MCP-E-TMUX-AMBIGUOUS pane cwd mismatch");
+      }
+      let authorized = false;
+      return {
+        launchId: "a".repeat(32),
+        authorize: async () => { if (authorizeTextError) throw authorizeTextError; authorized = true; },
+        send: async () => { preparedSendCalls++; if (!authorized) throw new Error("send before authorize"); return "a".repeat(32); },
+        abort: async () => { preparedAbortCalls++; },
+      };
     },
     selectWindow: async (target: string) => {
       selectedWindows.push(target);
@@ -294,7 +328,10 @@ const {
   getLiveTileRoles,
   _wtPicker,
   promptAmbiguousWorktreePick,
+  respawnPaneWithCommand,
+  sendLaunch,
 } = await import("../../src/commands/shared/wake-cmd");
+const { consumeIntegratedReadonly } = await import("../../src/config/codex-trust");
 
 beforeEach(resetState);
 
@@ -682,6 +719,57 @@ describe("wake-cmd thirteenth-pass isolated coverage", () => {
     expect(snapshots).toEqual(["wake"]);
   });
 
+  test("strict respawn revokes readonly authority when preparation fails", async () => {
+    prepareTextError = new Error("prepare rejected");
+    await expect(respawnPaneWithCommand("54-neo:neo-oracle", "SDA_CODEX_MCP_HOME='/tmp/i' route", repoPath, true)).rejects.toThrow("prepare rejected");
+    expect(respawnCalls).toEqual([]);
+    expect(preparedAuthority).toBeDefined();
+    expect(consumeIntegratedReadonly(preparedAuthority, "54-neo:neo-oracle", repoPath)).toBe(false);
+  });
+
+  test("strict respawn authorizes before kill and authorization failure preserves the pane", async () => {
+    authorizeTextError = new Error("final auth rejected");
+    await expect(respawnPaneWithCommand("54-neo:neo-oracle", "SDA_CODEX_MCP_HOME='/tmp/i' route", repoPath, true)).rejects.toThrow("final auth rejected");
+    expect(respawnCalls).toEqual([]);
+    expect(preparedSendCalls).toBe(0);
+    expect(preparedAbortCalls).toBe(1);
+    expect(consumeIntegratedReadonly(preparedAuthority, "54-neo:neo-oracle", repoPath)).toBe(false);
+  });
+
+  test("non-readonly strict wake launch requires the prepared cwd before sending", async () => {
+    const target = "54-neo:neo-oracle";
+    const command = "SDA_CODEX_MCP_HOME='/tmp/i' route";
+    observedPaneCwd = "/tmp/other-repo";
+
+    await expect(sendLaunch(target, command, repoPath, false))
+      .rejects.toThrow("SDA-MCP-E-TMUX-AMBIGUOUS pane cwd mismatch");
+    expect(sentText).toEqual([]);
+    expect(requiredCwdCalls).toEqual([{ kind: "send", target, requiredCwd: repoPath }]);
+
+    observedPaneCwd = repoPath;
+    await expect(sendLaunch(target, command, repoPath, false)).resolves.toBe("a".repeat(32));
+    expect(sentText).toEqual([{ target, text: command }]);
+    expect(requiredCwdCalls.at(-1)).toEqual({ kind: "send", target, requiredCwd: repoPath });
+  });
+
+  test("non-readonly strict respawn requires the prepared cwd before killing the pane", async () => {
+    const target = "54-neo:neo-oracle";
+    const command = "SDA_CODEX_MCP_HOME='/tmp/i' route";
+    observedPaneCwd = "/tmp/other-repo";
+
+    await expect(respawnPaneWithCommand(target, command, repoPath, false))
+      .rejects.toThrow("SDA-MCP-E-TMUX-AMBIGUOUS pane cwd mismatch");
+    expect(respawnCalls).toEqual([]);
+    expect(preparedSendCalls).toBe(0);
+    expect(requiredCwdCalls).toEqual([{ kind: "prepare", target, requiredCwd: repoPath }]);
+
+    observedPaneCwd = repoPath;
+    await expect(respawnPaneWithCommand(target, command, repoPath, false)).resolves.toBe("a".repeat(32));
+    expect(respawnCalls).toEqual([["respawn-pane", "-k", "-t", target]]);
+    expect(preparedSendCalls).toBe(1);
+    expect(requiredCwdCalls.at(-1)).toEqual({ kind: "prepare", target, requiredCwd: repoPath });
+  });
+
   test("existing live prompt and engine switches fall back to sendText when respawn-pane is unavailable", async () => {
     tmuxRunAvailable = false;
 
@@ -758,7 +846,7 @@ describe("wake-cmd thirteenth-pass isolated coverage", () => {
       _wtPicker.readChoice = () => "2";
 
       const result = await captureLogs(() =>
-        cmdWake("neo", { repoPath, task: "alpha", prompt: "selected", pick: true }),
+        cmdWake("neo", { repoPath, task: "alpha", pick: true }),
       );
 
       expect(result).toBe("54-neo:neo-alpha");
@@ -768,7 +856,7 @@ describe("wake-cmd thirteenth-pass isolated coverage", () => {
       ]);
       expect(sentText.at(-1)).toEqual({
         target: "54-neo:neo-alpha",
-        text: "cd /tmp/neo-oracle.wt-2-alpha && codex --agent neo-alpha -p 'selected'",
+        text: "cd /tmp/neo-oracle.wt-2-alpha && codex --agent neo-alpha",
       });
     } finally {
       _wtPicker.isStdoutTTY = originalIsTTY;
@@ -844,11 +932,13 @@ describe("wake-cmd thirteenth-pass isolated coverage", () => {
     });
   });
 
-  test("fuzzy worktree reuse launches a new prompted window with attach", async () => {
+  test("fuzzy worktree reuse rejects task prompts then launches with attach", async () => {
     findWorktreesReturn = [{ name: "1-alpha", path: "/tmp/neo-oracle.wt-1-alpha" }];
 
+    await expect(cmdWake("neo", { repoPath, task: "alpha", prompt: "ship now" })).rejects.toThrow("--prompt cannot be combined");
+
     const result = await captureLogs(() =>
-      cmdWake("neo", { repoPath, task: "alpha", prompt: "ship now", attach: true }),
+      cmdWake("neo", { repoPath, task: "alpha", attach: true }),
     );
 
     expect(result).toBe("54-neo:neo-alpha");
@@ -859,7 +949,7 @@ describe("wake-cmd thirteenth-pass isolated coverage", () => {
     ]);
     expect(sentText.at(-1)).toEqual({
       target: "54-neo:neo-alpha",
-      text: "cd /tmp/neo-oracle.wt-1-alpha && codex --agent neo-alpha -p 'ship now'",
+      text: "cd /tmp/neo-oracle.wt-1-alpha && codex --agent neo-alpha",
     });
     expect(attachCalls).toEqual(["54-neo"]);
     expect(splitCalls).toEqual(["54-neo:neo-alpha"]);

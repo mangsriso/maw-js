@@ -333,7 +333,7 @@ describe("wake-cmd eleventh-pass isolated coverage", () => {
     expect(text).toContain("2 window(s) reordered");
   });
 
-  test("task wake reuses a scoped worktree, writes bud lineage and birth signal, and sends an escaped prompt to a new window", async () => {
+  test("task wake reuses a scoped worktree, writes bud lineage and birth signal", async () => {
     listWindowsReturn = [{ name: "neo-oracle" }];
     reusableWorktreeReturn = { name: "old-stable", path: "/tmp/neo.wt-o'hai" };
 
@@ -344,7 +344,6 @@ describe("wake-cmd eleventh-pass isolated coverage", () => {
         name: "stable",
         bud: true,
         signalOnBirth: true,
-        prompt: "don't stop",
         attach: true,
         engine: "codex",
       }),
@@ -356,7 +355,7 @@ describe("wake-cmd eleventh-pass isolated coverage", () => {
     expect(newWindows).toEqual([{ session: "54-neo", window: "neo-stable", opts: { cwd: "/tmp/neo.wt-o'hai" } }]);
     expect(sentText.at(-1)).toEqual({
       target: "54-neo:neo-stable",
-      text: "cd /tmp/neo.wt-o'hai && codex --agent neo-stable -p 'don'\\''t stop'",
+      text: "cd /tmp/neo.wt-o'hai && codex --agent neo-stable",
     });
     expect(attachCalls).toEqual(["54-neo"]);
     expect(splitCalls).toEqual(["54-neo:neo-stable"]);

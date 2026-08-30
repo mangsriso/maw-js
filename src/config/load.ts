@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "fs";
+import { readFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import { CONFIG_FILE } from "../core/paths";
@@ -8,6 +8,7 @@ import type { MawConfig } from "./types";
 import { D } from "./types";
 import { validateConfig } from "./validate-ext";
 import { loadFleetAgents } from "./fleet-merge";
+import { mutateConfigTransactional, readConfigFreshTransactional } from "./transaction";
 import {
   DEFAULT_ACTIVE_PLUGINS_1500_MIGRATION,
   DEFAULT_ACTIVE_PLUGINS_1514_MIGRATION,
@@ -56,16 +57,33 @@ function canPersistConfigMigration(): boolean {
   return !(process.env.MAW_TEST_MODE === "1" && CONFIG_FILE === REAL_HOME_CONFIG);
 }
 
-function persistLoadedConfig(label: string): void {
-  if (!cached) return;
+function persistLoadedConfig(label: string, update: Partial<MawConfig>): void {
   if (!canPersistConfigMigration()) return;
   try {
-    writeFileSync(CONFIG_FILE, JSON.stringify(cached, null, 2) + "\n", "utf-8");
+    mutateConfigTransactional(CONFIG_FILE, fresh => ({ ...fresh, ...update }));
   } catch (e) {
     process.stderr.write(
       `[maw] ${label}: in-memory heal applied but disk persist failed: ` +
       `${e instanceof Error ? e.message : String(e)}\n`,
     );
+  }
+}
+
+function persistPluginMigration(label: string, marker: string, remove: (name: string) => boolean): void {
+  if (!canPersistConfigMigration()) return;
+  try {
+    mutateConfigTransactional(CONFIG_FILE, fresh => {
+      const migrations = fresh.migrations && typeof fresh.migrations === "object" && !Array.isArray(fresh.migrations)
+        ? { ...(fresh.migrations as Record<string, unknown>) }
+        : {};
+      if (migrations[marker] === true) return fresh;
+      const disabled = Array.isArray(fresh.disabledPlugins)
+        ? fresh.disabledPlugins.filter((name): name is string => typeof name === "string")
+        : [];
+      return { ...fresh, disabledPlugins: disabled.filter(name => !remove(name)), migrations: { ...migrations, [marker]: true } };
+    });
+  } catch (e) {
+    process.stderr.write(`[maw] ${label}: in-memory heal applied but disk persist failed: ${e instanceof Error ? e.message : String(e)}\n`);
   }
 }
 
@@ -86,7 +104,7 @@ function maybeMigrateDefaultActivePlugins(config: MawConfig): void {
     `[maw] config.disabledPlugins migration (#1500): re-enabled default-active plugins ` +
     `${promoted.join(", ")}. Disable them again with \`maw plugin disable <name>\` if intentional.\n`,
   );
-  persistLoadedConfig("config.disabledPlugins migration (#1500)");
+  persistPluginMigration("config.disabledPlugins migration (#1500)", marker, isDefaultActivePlugin);
 }
 
 function maybeMigrateSplitTopAliasPlugin(config: MawConfig): void {
@@ -110,7 +128,7 @@ function maybeMigrateSplitTopAliasPlugin(config: MawConfig): void {
     `[maw] config.disabledPlugins migration (#1514): re-enabled help-prominent plugins ` +
     `${promoted.join(", ")}. Disable them again with \`maw plugin disable <name>\` if intentional.\n`,
   );
-  persistLoadedConfig("config.disabledPlugins migration (#1514)");
+  persistPluginMigration("config.disabledPlugins migration (#1514)", marker, isDefaultActive1514Plugin);
 }
 
 function maybeMigrateShellenvStandardPlugin(config: MawConfig): void {
@@ -135,7 +153,7 @@ function maybeMigrateShellenvStandardPlugin(config: MawConfig): void {
     `[maw] config.disabledPlugins migration (#1523): re-enabled shell integration plugins ` +
     `${promoted.join(", ")}. Disable them again with \`maw plugin disable <name>\` if intentional.\n`,
   );
-  persistLoadedConfig("config.disabledPlugins migration (#1523)");
+  persistPluginMigration("config.disabledPlugins migration (#1523)", marker, isDefaultActive1523Plugin);
 }
 
 function maybeMigrateCompletionsStandardPlugin(config: MawConfig): void {
@@ -158,7 +176,7 @@ function maybeMigrateCompletionsStandardPlugin(config: MawConfig): void {
     `[maw] config.disabledPlugins migration (#1524): re-enabled completion plugins ` +
     `${promoted.join(", ")}. Disable them again with \`maw plugin disable <name>\` if intentional.\n`,
   );
-  persistLoadedConfig("config.disabledPlugins migration (#1524)");
+  persistPluginMigration("config.disabledPlugins migration (#1524)", marker, isDefaultActive1524Plugin);
 }
 
 function maybeMigrateOracleWorkflowStandardPlugins(config: MawConfig): void {
@@ -182,7 +200,7 @@ function maybeMigrateOracleWorkflowStandardPlugins(config: MawConfig): void {
     `[maw] config.disabledPlugins migration (#1531): re-enabled Oracle workflow plugins ` +
     `${promoted.join(", ")}. Disable them again with \`maw plugin disable <name>\` if intentional.\n`,
   );
-  persistLoadedConfig("config.disabledPlugins migration (#1531)");
+  persistPluginMigration("config.disabledPlugins migration (#1531)", marker, isDefaultActive1531Plugin);
 }
 
 function maybeMigrateViewStandardPlugin(config: MawConfig): void {
@@ -207,7 +225,7 @@ function maybeMigrateViewStandardPlugin(config: MawConfig): void {
     `[maw] config.disabledPlugins migration (#1854): re-enabled view plugins ` +
     `${promoted.join(", ")}. Disable them again with \`maw plugin disable <name>\` if intentional.\n`,
   );
-  persistLoadedConfig("config.disabledPlugins migration (#1854)");
+  persistPluginMigration("config.disabledPlugins migration (#1854)", marker, isDefaultActive1854Plugin);
 }
 
 export function loadConfig(): MawConfig {
@@ -279,7 +297,7 @@ export function loadConfig(): MawConfig {
     // forgot to sandbox MAW_HOME (mirrors the #820 saveConfig guard).
     // Tests that DO sandbox via MAW_HOME=<tmpdir> still get the persist
     // (which is exactly what we want — they verify the disk write).
-    persistLoadedConfig("config.host migration");
+    persistLoadedConfig("config.host migration", { host: "local" });
   }
   maybeMigrateDefaultActivePlugins(cached);
   maybeMigrateSplitTopAliasPlugin(cached);
@@ -317,6 +335,18 @@ export function loadConfig(): MawConfig {
   return cached;
 }
 
+/** Request-authority read: never consults or updates the process cache. */
+export function loadConfigFresh(): MawConfig & { __rawConfigSha256?: string } {
+  const snapshot = readConfigFreshTransactional(CONFIG_FILE);
+  const validated = validateConfig(snapshot.value);
+  const fresh: MawConfig & { __rawConfigSha256?: string } = { ...DEFAULTS, ...validated, __rawConfigSha256: snapshot.rawSha256 };
+  try {
+    const merged = loadFleetAgents(fresh.agents || {}, fresh.node);
+    if (Object.keys(merged).length > 0) fresh.agents = merged;
+  } catch {}
+  return fresh;
+}
+
 /** Reset cached config (for hot-reload or testing) */
 export function resetConfig() {
   cached = null;
@@ -350,9 +380,7 @@ export function saveConfig(update: Partial<MawConfig>) {
       `import is resolved (see src/core/paths.ts). (#820)`,
     );
   }
-  const current = loadConfig();
-  const merged = { ...current, ...update };
-  writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2) + "\n", "utf-8");
+  mutateConfigTransactional(CONFIG_FILE, fresh => ({ ...fresh, ...update }));
   resetConfig(); // clear cache so next loadConfig() reads fresh
   refreshContext(); // clear DI cache so middleware picks up new config
   return loadConfig();

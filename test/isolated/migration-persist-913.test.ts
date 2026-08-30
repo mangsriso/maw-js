@@ -333,12 +333,10 @@ describe("#913 — hostExec sees migrated host on next process boot", () => {
 
 // ─── (5) Source-level guard — the persist branch lives inside loadConfig ─────
 
-test("#913 — load.ts contains a writeFileSync inside the host=node migration block", () => {
+test("#913 — load.ts routes host=node persistence through the transactional writer", () => {
   const src = readFileSync(join(REPO_ROOT, "src/config/load.ts"), "utf-8");
-  // The fix must call writeFileSync after setting cached.host = "local"
-  // in the host=node branch. We check the structural pattern rather
-  // than exact whitespace so a future refactor can rearrange comments.
-  expect(src).toMatch(/cached\.host = "local";[\s\S]*writeFileSync\(CONFIG_FILE/);
+  expect(src).toMatch(/cached\.host = "local";[\s\S]*persistLoadedConfig\("config\.host migration", \{ host: "local" \}\)/);
+  expect(src).toMatch(/mutateConfigTransactional\(CONFIG_FILE/);
   // The #820-style guard must wrap the persist.
   expect(src).toMatch(/MAW_TEST_MODE.*REAL_HOME_CONFIG/);
 });

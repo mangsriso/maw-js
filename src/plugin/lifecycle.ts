@@ -126,6 +126,11 @@ export async function runLifecycleHooks(
 ): Promise<LifecycleRunSummary> {
   const summary: LifecycleRunSummary = { phase, ran: 0, skipped: 0, failed: 0 };
 
+  // The immutable strict ingress is intentionally a closed route graph.  It
+  // may call the normal wake planner, but no user/package lifecycle module is
+  // discovered or loaded before terminal delivery.
+  if (process.env.SDA_MAW_STRICT_PLUGINS === "disabled") return summary;
+
   for (const plugin of sortByLifecycleOrder(discover())) {
     if (plugin.disabled) { summary.skipped++; continue; }
     const hook = plugin.manifest.hooks?.[phase];

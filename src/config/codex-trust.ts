@@ -12,11 +12,53 @@ import {
   realpathSync, existsSync, lstatSync, mkdirSync,
   readFileSync, writeFileSync, renameSync, copyFileSync,
   openSync, closeSync, statSync, unlinkSync,
+  chmodSync, fsyncSync,
 } from "fs";
 import { join } from "path";
 import { homedir } from "os";
+import { randomBytes } from "crypto";
 import { buildCommandFromConfig } from "./command";
 import { loadConfig } from "./load";
+type ReadonlyAuthority = { target: string; realDir: string };
+const readonlyIntegratedAuthorities = new Map<string, ReadonlyAuthority>();
+export function createIntegratedReadonlyAuthority(target: string, realDir: string): string {
+  const token = randomBytes(16).toString("hex");
+  readonlyIntegratedAuthorities.set(token, { target, realDir });
+  return token;
+}
+export function consumeIntegratedReadonly(token: string | undefined, target: string, realDir: string): boolean {
+  if (!token) return false;
+  const authority = readonlyIntegratedAuthorities.get(token);
+  if (!authority || authority.target !== target || authority.realDir !== realDir) return false;
+  readonlyIntegratedAuthorities.delete(token);
+  return true;
+}
+export function restoreIntegratedReadonly(token: string, target: string, realDir: string): void {
+  if (/^[0-9a-f]{32}$/.test(token)) readonlyIntegratedAuthorities.set(token, { target, realDir });
+}
+export function revokeIntegratedReadonly(token: string | undefined): void {
+  if (token) readonlyIntegratedAuthorities.delete(token);
+}
+function trustedProjectInToml(content: string, realDir: string): boolean {
+  const escaped = realDir.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const header = `[projects."${escaped}"]`;
+  let inProject = false;
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    if (line.startsWith("[")) {
+      inProject = line === header;
+      continue;
+    }
+    if (inProject && /^trust_level\s*=\s*"trusted"\s*(?:#.*)?$/.test(line)) return true;
+  }
+  return false;
+}
+export function verifyCodexTrust(realDir: string, codexDir = join(homedir(), ".codex")): boolean {
+  try {
+    return trustedProjectInToml(readFileSync(join(codexDir, "config.toml"), "utf8"), realDir);
+  } catch { return false; }
+}
 
 /**
  * True iff the resolved engine command launches the `codex` binary. Robust to
@@ -51,7 +93,7 @@ const STALE_LOCK_MS = 10_000;
 async function acquireLock(lock: string): Promise<boolean> {
   for (let i = 0; i < 12; i++) {
     try {
-      closeSync(openSync(lock, "wx"));
+      closeSync(openSync(lock, "wx", 0o600));
       return true;
     } catch {
       try {
@@ -69,14 +111,13 @@ async function acquireLock(lock: string): Promise<boolean> {
 /** Idempotently add `[projects."<realDir>"] trust_level = "trusted"` to
  * ~/.codex/config.toml. Symlink-safe (operates on the link target so atomic
  * rename doesn't detach a managed config), concurrency-safe, one-time backup. */
-export async function ensureCodexTrust(realDir: string): Promise<void> {
+export async function ensureCodexTrust(realDir: string, codexDir = join(homedir(), ".codex")): Promise<void> {
   // escaping guard — TOML basic-string key cannot contain " \ or control chars;
   // filesystem paths here won't, but never corrupt the file if they do.
   if (/["\\\x00-\x1f]/.test(realDir)) {
     console.warn(`[maw] codex-trust: skip auto-trust (unsafe chars in path): ${realDir}`);
     return;
   }
-  const codexDir = join(homedir(), ".codex");
   const linkPath = join(codexDir, "config.toml");
   // Resolve a symlinked config.toml to its target so temp+rename replaces the
   // target file in place and leaves the symlink (chezmoi/stow) intact.
@@ -91,12 +132,13 @@ export async function ensureCodexTrust(realDir: string): Promise<void> {
   const lock = join(codexDir, ".maw-trust.lock");
   let locked = false;
   try {
-    if (!existsSync(codexDir)) mkdirSync(codexDir, { recursive: true });
+    if (!existsSync(codexDir)) mkdirSync(codexDir, { recursive: true, mode: 0o700 });
+    chmodSync(codexDir, 0o700);
     locked = await acquireLock(lock);
 
     let content = "";
     try { content = readFileSync(target, "utf-8"); } catch { content = ""; }
-    if (content.includes(header)) return; // already trusted → no-op
+    if (trustedProjectInToml(content, realDir)) return; // already trusted → no-op
 
     if (content && !existsSync(target + ".maw-bak")) {
       try { copyFileSync(target, target + ".maw-bak"); } catch { /* best-effort */ }
@@ -108,8 +150,12 @@ export async function ensureCodexTrust(realDir: string): Promise<void> {
     next += `${header}\ntrust_level = "trusted"\n`;
 
     const tmp = `${target}.maw-tmp.${process.pid}`; // pid-unique: no shared-tmp clobber if two procs fail open the lock
-    writeFileSync(tmp, next, "utf-8");
+    writeFileSync(tmp, next, { encoding: "utf-8", mode: 0o600 });
+    chmodSync(tmp, 0o600);
+    const tmpFd = openSync(tmp, "r");
+    try { fsyncSync(tmpFd); } finally { closeSync(tmpFd); }
     renameSync(tmp, target); // atomic, same dir → no EXDEV
+    chmodSync(target, 0o600);
   } catch (e) {
     console.warn(`[maw] codex-trust: could not trust ${realDir}: ${e instanceof Error ? e.message : String(e)}`);
   } finally {
@@ -155,6 +201,12 @@ export async function prepareCodexLaunch(
   let real: string;
   try { real = realpathSync(rawCwd); }
   catch { return rawCwd; } // path not materialized yet → degrade, skip trust
+
+  // The frozen durable route owns token-free preflight + receipt-bound strict
+  // trust at the centralized tmux delivery boundary. Never mutate trust early.
+  if (cmd.startsWith("SDA_CODEX_MCP_HOME='")) {
+    return real;
+  }
 
   if (allowTrust && loadConfig().codexAutoTrust !== false) {
     await ensureCodexTrust(real);

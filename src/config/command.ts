@@ -1,10 +1,10 @@
-import { loadConfig } from "./load";
+import { loadConfig, loadConfigFresh } from "./load";
 import { buildCommandFromConfig, buildCommandInDirFromConfig } from "./command-logic";
 
 export { buildCommandFromConfig, buildCommandInDirFromConfig } from "./command-logic";
 
 export function buildCommand(agentName: string, engine?: string): string {
-  return buildCommandFromConfig(loadConfig(), agentName, engine);
+  return buildCommandFromConfig(loadConfigFresh(), agentName, engine);
 }
 
 /**
@@ -15,7 +15,7 @@ export function buildCommand(agentName: string, engine?: string): string {
  * detection such as Discord bot `--channels` injection.
  */
 export function buildCommandInDir(agentName: string, cwd: string, engine?: string): string {
-  return buildCommandInDirFromConfig(loadConfig(), agentName, cwd, engine);
+  return buildCommandInDirFromConfig(loadConfigFresh(), agentName, cwd, engine);
 }
 
 export function getEnvVars(): Record<string, string> {

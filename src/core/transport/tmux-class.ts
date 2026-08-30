@@ -24,6 +24,42 @@ const MAX_SUBMIT_ATTEMPTS = 4;
 /** ANSI escape stripper — matches checkPaneIdle in comm-send.ts (#405). */
 const ANSI_RE = /\x1b\[[0-9;]*[mGKHFJA-Z]/g;
 
+/**
+ * Encode independently-probed tmux identity fields with byte-exact framing.
+ * Values are UTF-8 and may contain newlines or any legacy separator bytes.
+ */
+export function encodeTmuxProbeFields(values: string[]): Buffer {
+  return Buffer.concat(values.flatMap(value => {
+    const body = Buffer.from(value, "utf8");
+    return [Buffer.from(`${body.length}:`, "ascii"), body];
+  }));
+}
+
+/** Decode exactly `count` byte-length-prefixed tmux identity fields. */
+export function decodeTmuxProbeFields(frame: Buffer, count: number): string[] {
+  const values: string[] = [];
+  let offset = 0;
+  while (values.length < count) {
+    const colon = frame.indexOf(0x3a, offset);
+    if (colon < 0) throw new Error("SDA-MCP-E-TMUX-AMBIGUOUS probe frame truncated");
+    const lengthText = frame.subarray(offset, colon).toString("ascii");
+    if (!/^(?:0|[1-9]\d*)$/.test(lengthText)) throw new Error("SDA-MCP-E-TMUX-AMBIGUOUS probe frame length invalid");
+    const length = Number(lengthText);
+    if (!Number.isSafeInteger(length) || length > 1_048_576) throw new Error("SDA-MCP-E-TMUX-AMBIGUOUS probe frame length unsafe");
+    const start = colon + 1, end = start + length;
+    if (end > frame.length) throw new Error("SDA-MCP-E-TMUX-AMBIGUOUS probe frame truncated");
+    values.push(frame.subarray(start, end).toString("utf8"));
+    offset = end;
+  }
+  if (offset !== frame.length) throw new Error("SDA-MCP-E-TMUX-AMBIGUOUS probe frame trailing bytes");
+  return values;
+}
+
+/** @internal exact-cwd guard for strict route tests and websocket callers. */
+export function requireStrictPaneCwd(required: string | undefined, observed: string): void {
+  if (required !== undefined && required !== observed) throw new Error("SDA-MCP-E-TMUX-AMBIGUOUS pane cwd mismatch");
+}
+
 function isTmuxNoServerError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /no server/i.test(message) || /failed to connect to server/i.test(message);
@@ -451,18 +487,74 @@ export class Tmux {
    * staggered Enter keys landed before the pane was ready and the command
    * was silently left unexecuted.
    */
-  async sendText(target: string, text: string): Promise<void> {
-    await this.exitModeIfNeeded(target);
-    if (text.includes("\n") || text.length > 500) {
-      // Buffer method — reliable for multiline/long content
-      await this.loadBuffer(text);
-      await this.pasteBuffer(target);
-    } else {
-      // Literal send — -l prevents tmux from interpreting special chars like |
-      await this.sendKeysLiteral(target, text);
+  async prepareText(target: string, text: string, options: { integratedReadonlyAuthority?: string; requiredCwd?: string } = {}): Promise<{ launchId?: string; authorize: () => Promise<void>; send: () => Promise<string | undefined>; abort: () => Promise<void> }> {
+    let abortIntegrated: (() => Promise<void>) | undefined;
+    let authorizeIntegrated: (() => Promise<void>) | undefined;
+    let launchId: string | undefined;
+    if (text.startsWith("SDA_CODEX_MCP_HOME='")) {
+      const { planIntegratedDelivery, registerIntegratedReadiness } = await import("../../integration/codex-delivery-plan");
+      const planned = await planIntegratedDelivery(target, text, async (paneTarget) => {
+        if (this.host) throw new Error("SDA-MCP-E-TMUX-AMBIGUOUS remote strict delivery unsupported");
+        // Each value is obtained in its own process response and then bound
+        // into an explicit byte-length-prefixed frame. Socket/cwd bytes that
+        // contain the legacy `|||` separator cannot alter field boundaries.
+        const formats = ["#{socket_path}", "#{pid}", "#{session_id}", "#{pane_id}", "#{pane_current_path}", "#{pane_pid}"];
+        const probed = await Promise.all(formats.map(format => this.run("display-message", "-p", "-t", paneTarget, format).then(value => value.replace(/\n$/, ""))));
+        const fields = decodeTmuxProbeFields(encodeTmuxProbeFields(probed), formats.length);
+        if (!fields[0]?.startsWith("/") || !/^\d+$/.test(fields[1] ?? "") || !/^\$\d+$/.test(fields[2] ?? "") || !/^%\d+$/.test(fields[3] ?? "") || !fields[4]?.startsWith("/") || !/^\d+$/.test(fields[5] ?? "")) throw new Error("SDA-MCP-E-TMUX-AMBIGUOUS pane identity invalid");
+        requireStrictPaneCwd(options.requiredCwd, fields[4]!);
+        const pid = Number(fields[1]);
+        const statText = (await Bun.file(`/proc/${pid}/stat`).text());
+        const end = statText.lastIndexOf(")");
+        const startTicks = Number(statText.slice(end + 2).split(" ")[19]);
+        if (!Number.isSafeInteger(pid) || pid < 1 || !Number.isSafeInteger(startTicks) || startTicks < 1) throw new Error("SDA-MCP-E-TMUX-AMBIGUOUS server identity invalid");
+        const environ = Buffer.from(await Bun.file(`/proc/${fields[5]}/environ`).arrayBuffer()).toString("utf8").split("\0");
+        const tmuxEnv = environ.find(item => item.startsWith("TMUX="))?.slice(5);
+        if (tmuxEnv === undefined) throw new Error("SDA-MCP-E-TMUX-AMBIGUOUS pane TMUX identity absent");
+        return { socket: fields[0]!, serverPid: pid, serverStartTicks: startTicks, session: fields[2]!, pane: fields[3]!, cwd: fields[4]!, tmuxEnv };
+      }, options.integratedReadonlyAuthority);
+      if (!planned) throw new Error("SDA-MCP-E-ROUTE reserved integrated route is malformed");
+      text = planned.payload;
+      launchId = planned.launchId;
+      abortIntegrated = planned.abort;
+      authorizeIntegrated = planned.authorizeDispatch;
+      registerIntegratedReadiness(launchId, planned.readiness);
     }
-    await new Promise(r => setTimeout(r, SEND_SETTLE_MS));
-    await this.submitWithConfirm(target);
+    let completed = false;
+    let authorized = false;
+    const abort = async (): Promise<void> => { if (!completed && abortIntegrated) await abortIntegrated(); };
+    const authorize = async (): Promise<void> => {
+      if (authorized) return;
+      if (authorizeIntegrated) await authorizeIntegrated();
+      authorized = true;
+    };
+    const send = async (): Promise<string | undefined> => {
+      try {
+        // This re-authenticates the exact config bytes at the last possible
+        // boundary before any tmux mutation.
+        await authorize();
+        await this.exitModeIfNeeded(target);
+        if (text.includes("\n") || text.length > 500) {
+          await this.loadBuffer(text);
+          await this.pasteBuffer(target);
+        } else {
+          await this.sendKeysLiteral(target, text);
+        }
+        await new Promise(r => setTimeout(r, SEND_SETTLE_MS));
+        await this.submitWithConfirm(target);
+        completed = true;
+      } catch (error) {
+        await abort();
+        throw error;
+      }
+      return launchId;
+    };
+    return { launchId, authorize, send, abort };
+  }
+
+  async sendText(target: string, text: string, options: { integratedReadonlyAuthority?: string; requiredCwd?: string } = {}): Promise<string | undefined> {
+    const prepared = await this.prepareText(target, text, options);
+    return prepared.send();
   }
 
   /**
